@@ -231,3 +231,105 @@ def _fip(so, bb, er, ip):
         return LEAGUE_AVG_ERA
     hr_est = er * 0.25
     return max(1.0, ((13 * hr_est + 3 * bb - 2 * so) / ip) + 3.10)
+
+
+# ── Lineup & player info ───────────────────────────────────────────────────────
+
+_PLAYER_INFO_CACHE = {}
+_PLATOON_CACHE     = {}
+_BVP_CACHE         = {}
+
+def get_lineup(game_pk):
+    """Return {home: [player_id, ...], away: [player_id, ...]} in batting order."""
+    data = _get(f"/game/{game_pk}/boxscore")
+    if not data:
+        return {}
+    result = {}
+    for side in ("home", "away"):
+        order = data.get("teams", {}).get(side, {}).get("battingOrder", [])
+        result[side] = [int(p) for p in order if p]
+    return result
+
+
+def get_player_info(player_id):
+    """Return {bat_side: L/R/S, pitch_hand: L/R, full_name: str}."""
+    if player_id in _PLAYER_INFO_CACHE:
+        return _PLAYER_INFO_CACHE[player_id]
+    data = _get(f"/people/{player_id}")
+    if not data or not data.get("people"):
+        return {"bat_side": "R", "pitch_hand": "R", "full_name": ""}
+    p = data["people"][0]
+    info = {
+        "bat_side":   p.get("batSide",   {}).get("code", "R"),
+        "pitch_hand": p.get("pitchHand", {}).get("code", "R"),
+        "full_name":  p.get("fullName",  ""),
+    }
+    _PLAYER_INFO_CACHE[player_id] = info
+    return info
+
+
+def get_pitcher_platoon_splits(pitcher_id, season=None):
+    """
+    Return pitcher ERA split by batter handedness:
+    {era_vs_lhb, era_vs_rhb, ops_vs_lhb, ops_vs_rhb}
+    sitCode vl = vs left-handed batters, vr = vs right-handed batters
+    """
+    key = (pitcher_id, season or CURRENT_SEASON)
+    if key in _PLATOON_CACHE:
+        return _PLATOON_CACHE[key]
+    season = season or CURRENT_SEASON
+    data = _get(f"/people/{pitcher_id}/stats", params={
+        "stats": "statSplits", "group": "pitching",
+        "season": season, "sitCodes": "vl,vr",
+    })
+    result = {}
+    for sg in (data or {}).get("stats", []):
+        for split in sg.get("splits", []):
+            code = split.get("split", {}).get("code", "")
+            s    = split.get("stat", {})
+            era  = _f(s.get("era",  None))
+            whip = _f(s.get("whip", None))
+            avg  = _f(s.get("avg",  None))
+            if code == "vl":
+                result["era_vs_lhb"]  = era  if era  else None
+                result["whip_vs_lhb"] = whip if whip else None
+                result["avg_vs_lhb"]  = avg  if avg  else None
+            elif code == "vr":
+                result["era_vs_rhb"]  = era  if era  else None
+                result["whip_vs_rhb"] = whip if whip else None
+                result["avg_vs_rhb"]  = avg  if avg  else None
+    _PLATOON_CACHE[key] = result
+    return result
+
+
+def get_batter_vs_pitcher(batter_id, pitcher_id):
+    """
+    Return career batter vs pitcher matchup stats:
+    {pa, ab, hits, hr, avg, ops, k, bb}
+    """
+    key = (batter_id, pitcher_id)
+    if key in _BVP_CACHE:
+        return _BVP_CACHE[key]
+    data = _get(f"/people/{batter_id}/stats", params={
+        "stats": "vsPlayer", "group": "hitting",
+        "opposingPlayerId": pitcher_id,
+    })
+    result = {}
+    for sg in (data or {}).get("stats", []):
+        splits = sg.get("splits", [])
+        if splits:
+            s = splits[0]["stat"]
+            result = {
+                "pa":   _i(s.get("plateAppearances", 0)),
+                "ab":   _i(s.get("atBats", 0)),
+                "hits": _i(s.get("hits", 0)),
+                "hr":   _i(s.get("homeRuns", 0)),
+                "k":    _i(s.get("strikeOuts", 0)),
+                "bb":   _i(s.get("baseOnBalls", 0)),
+                "avg":  _f(s.get("avg",  0.250)),
+                "ops":  _f(s.get("ops",  0.720)),
+                "obp":  _f(s.get("obp",  0.320)),
+                "slg":  _f(s.get("slg",  0.400)),
+            }
+    _BVP_CACHE[key] = result
+    return result

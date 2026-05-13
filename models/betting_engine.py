@@ -32,6 +32,7 @@ def find_daily_bets(games):
 
         candidates.extend(_moneyline_bets(proj, fd))
         candidates.extend(_total_bets(proj, fd))
+        candidates.extend(_nrfi_bets(proj, fd))
 
         if fd and fd.get("event_id"):
             props = get_player_props(
@@ -242,6 +243,71 @@ def _batter_hits_bets(proj, props):
 def _batter_tb_bets(proj, props):
     """Placeholder: total-bases props require lineup + individual batter stats."""
     return []
+
+
+# ── NRFI (No Run First Inning) ────────────────────────────────────────────────
+
+def _nrfi_bets(proj, fd):
+    """
+    Evaluate NRFI props.  FanDuel lists these under alternate-runline or
+    first-inning markets.  We fall back to a synthetic line when FD doesn't
+    carry the market so we never miss an edge that surfaces later.
+    """
+    bets = []
+    nrfi_prob = proj.get("nrfi_prob")
+    if nrfi_prob is None:
+        return bets
+
+    game_label = _game_label(proj)
+
+    # Try to pull FanDuel NRFI odds from the fd dict (key injected by odds_api)
+    nrfi_yes_odds = fd.get("nrfi_yes_odds") if fd else None
+    nrfi_no_odds  = fd.get("nrfi_no_odds")  if fd else None
+
+    # If FD doesn't carry the market, synthesise fair odds with ~5% book margin
+    if nrfi_yes_odds is None:
+        fair_dec      = 1.0 / max(0.01, nrfi_prob)
+        nrfi_yes_odds = decimal_to_american(round(fair_dec * 0.95, 3))
+    if nrfi_no_odds is None:
+        yrfi_prob     = 1.0 - nrfi_prob
+        fair_dec      = 1.0 / max(0.01, yrfi_prob)
+        nrfi_no_odds  = decimal_to_american(round(fair_dec * 0.95, 3))
+
+    matchup = proj.get("matchup", {})
+    home_sp = proj["game"].get("home_pitcher", "Home SP")
+    away_sp = proj["game"].get("away_pitcher", "Away SP")
+    has_lineup = matchup.get("has_lineup", False)
+    lineup_note = "lineup posted" if has_lineup else "lineup pending"
+
+    for label, odds, our_prob in [
+        ("NRFI", nrfi_yes_odds, nrfi_prob),
+        ("YRFI", nrfi_no_odds,  1.0 - nrfi_prob),
+    ]:
+        if odds < MIN_ODDS_AMERICAN:
+            continue
+        implied = american_to_implied_prob(odds)
+        edge    = our_prob - implied
+        bets.append({
+            "type":          f"nrfi_{label.lower()}",
+            "description":   f"{label} - {game_label}",
+            "game":          game_label,
+            "american_odds": odds,
+            "our_prob":      round(our_prob, 4),
+            "implied_prob":  round(implied, 4),
+            "edge":          round(edge, 4),
+            "reasoning": (
+                "NRFI model {:.1f}% | away SP {} | home SP {} | "
+                "platoon factor away {:.2f}x home {:.2f}x | {}".format(
+                    nrfi_prob * 100,
+                    away_sp, home_sp,
+                    matchup.get("away_factor", 1.0),
+                    matchup.get("home_factor", 1.0),
+                    lineup_note,
+                )
+            ),
+        })
+
+    return bets
 
 
 # ── Parlay builder ────────────────────────────────────────────────────────────
