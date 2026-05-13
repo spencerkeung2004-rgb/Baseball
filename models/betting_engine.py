@@ -4,6 +4,7 @@ Betting engine.
 Scans today's games, computes edge vs FanDuel lines, sizes via fractional Kelly,
 and returns the top DAILY_PICKS bets (single-leg or parlay).
 """
+import itertools
 from config import (
     MIN_ODDS_AMERICAN, MIN_EDGE, MAX_UNITS, MIN_UNITS, UNIT_SIZE, DAILY_PICKS,
 )
@@ -22,49 +23,63 @@ def find_daily_bets(games):
     """
     Given today's list of game dicts (from mlb_api.get_schedule),
     return up to DAILY_PICKS bet dicts sorted by edge descending.
+    Parlays from different games compete directly with single-leg picks.
     """
     fd_games = get_mlb_odds()
-    candidates = []
+    single_leg = []
 
     for game in games:
         fd = match_fd_game(game, fd_games)
         proj = project_game(game)
 
-        candidates.extend(_moneyline_bets(proj, fd))
-        candidates.extend(_total_bets(proj, fd))
-        candidates.extend(_nrfi_bets(proj, fd))
+        single_leg.extend(_moneyline_bets(proj, fd))
+        single_leg.extend(_total_bets(proj, fd))
+        single_leg.extend(_nrfi_bets(proj, fd))
 
         if fd and fd.get("event_id"):
             props = get_player_props(
                 fd["event_id"],
                 markets=["pitcher_strikeouts", "batter_hits", "batter_total_bases"],
             )
-            candidates.extend(_pitcher_k_bets(proj, props))
-            candidates.extend(_batter_hits_bets(proj, props))
-            candidates.extend(_batter_tb_bets(proj, props))
+            single_leg.extend(_pitcher_k_bets(proj, props))
+            single_leg.extend(_batter_hits_bets(proj, props))
+            single_leg.extend(_batter_tb_bets(proj, props))
 
-    # Filter: edge threshold + minimum odds
+    # Filter single-leg candidates
     qualified = [
-        b for b in candidates
+        b for b in single_leg
         if b["edge"] >= MIN_EDGE and b["american_odds"] >= MIN_ODDS_AMERICAN
     ]
     qualified.sort(key=lambda x: x["edge"], reverse=True)
 
-    # Size each bet
-    for b in qualified:
-        b["units"]         = _kelly_units(b["our_prob"], b["american_odds"])
-        b["stake"]         = round(b["units"] * UNIT_SIZE, 2)
-        b["potential_win"] = round(b["stake"] * (american_to_decimal(b["american_odds"]) - 1), 2)
+    # Build parlays from the top pool, combining only bets from different games
+    parlays = _generate_parlays(qualified[:10])
 
-    picks = list(qualified[:DAILY_PICKS])
+    # All candidates compete together; parlays capped at 1u (higher variance)
+    all_candidates = qualified + parlays
+    all_candidates.sort(key=lambda x: x["edge"], reverse=True)
 
-    # Fill remaining slots with a parlay if we have extra candidates
-    if len(picks) < DAILY_PICKS and len(qualified) >= 2:
-        parlay = _build_parlay(qualified[:5])
-        if parlay:
-            picks.append(parlay)
+    # Size each bet (parlays already have units set)
+    for b in all_candidates:
+        if "units" not in b:
+            b["units"]         = _kelly_units(b["our_prob"], b["american_odds"])
+            b["stake"]         = round(b["units"] * UNIT_SIZE, 2)
+            b["potential_win"] = round(b["stake"] * (american_to_decimal(b["american_odds"]) - 1), 2)
 
-    return picks[:DAILY_PICKS]
+    # Pick top DAILY_PICKS, avoiding duplicate legs across picks
+    picks = []
+    used_legs = set()
+    for b in all_candidates:
+        if len(picks) >= DAILY_PICKS:
+            break
+        # Single-leg: check description not already in a chosen parlay
+        legs = b.get("legs") or [b["description"]]
+        if used_legs & set(legs):
+            continue
+        picks.append(b)
+        used_legs.update(legs)
+
+    return picks
 
 
 # ── Moneyline ─────────────────────────────────────────────────────────────────
@@ -312,42 +327,56 @@ def _nrfi_bets(proj, fd):
 
 # ── Parlay builder ────────────────────────────────────────────────────────────
 
-def _build_parlay(candidates, max_legs=3):
-    """Combine up to max_legs independent bets into a parlay."""
-    legs = candidates[:max_legs]
-    if len(legs) < 2:
-        return None
+def _generate_parlays(pool, max_legs=3):
+    """
+    Generate all valid 2- and 3-leg parlays from pool, combining only bets
+    from different games.  Returns parlays that clear MIN_EDGE at +100 or better.
+    """
+    parlays = []
+    for n_legs in (2, 3):
+        for combo in itertools.combinations(pool, n_legs):
+            # Reject same-game combos (correlated outcomes)
+            games = [b["game"] for b in combo]
+            if len(set(games)) < n_legs:
+                continue
 
-    combined_dec  = 1.0
-    combined_prob = 1.0
-    for leg in legs:
-        combined_dec  *= american_to_decimal(leg["american_odds"])
-        combined_prob *= leg["our_prob"]
+            combined_dec  = 1.0
+            combined_prob = 1.0
+            for leg in combo:
+                combined_dec  *= american_to_decimal(leg["american_odds"])
+                combined_prob *= leg["our_prob"]
 
-    combined_american = decimal_to_american(combined_dec)
-    if combined_american < MIN_ODDS_AMERICAN:
-        return None
+            combined_american = decimal_to_american(combined_dec)
+            if combined_american < MIN_ODDS_AMERICAN:
+                continue
 
-    implied = american_to_implied_prob(combined_american)
-    edge    = combined_prob - implied
-    if edge < MIN_EDGE:
-        return None
+            implied = american_to_implied_prob(combined_american)
+            edge    = combined_prob - implied
+            if edge < MIN_EDGE:
+                continue
 
-    units = MIN_UNITS
-    return {
-        "type":         "parlay",
-        "description":  f"{len(legs)}-Leg Parlay",
-        "game":         " + ".join(set(l["game"] for l in legs)),
-        "legs":         [l["description"] for l in legs],
-        "american_odds": combined_american,
-        "our_prob":     round(combined_prob, 4),
-        "implied_prob": round(implied, 4),
-        "edge":         round(edge, 4),
-        "units":        units,
-        "stake":        round(units * UNIT_SIZE, 2),
-        "potential_win": round(units * UNIT_SIZE * (combined_dec - 1), 2),
-        "reasoning":    f"{len(legs)} legs combined @ +{combined_american}",
-    }
+            units = 1.0  # parlays are always 1u
+            parlays.append({
+                "type":          "parlay",
+                "description":   "{}-Leg Parlay".format(n_legs),
+                "game":          " + ".join(dict.fromkeys(games)),
+                "legs":          [b["description"] for b in combo],
+                "american_odds": combined_american,
+                "our_prob":      round(combined_prob, 4),
+                "implied_prob":  round(implied, 4),
+                "edge":          round(edge, 4),
+                "units":         units,
+                "stake":         round(units * UNIT_SIZE, 2),
+                "potential_win": round(units * UNIT_SIZE * (combined_dec - 1), 2),
+                "reasoning":     "{} legs | {}".format(
+                    n_legs,
+                    " / ".join(b["description"] for b in combo),
+                ),
+            })
+
+    # Surface only the best parlay per unique leg-set (no redundant subsets)
+    parlays.sort(key=lambda x: x["edge"], reverse=True)
+    return parlays
 
 
 # ── Kelly sizing ──────────────────────────────────────────────────────────────
