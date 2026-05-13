@@ -36,7 +36,7 @@ def get_schedule(date_str):
     games = []
     for raw in data["dates"][0].get("games", []):
         state = raw.get("status", {}).get("abstractGameState", "")
-        if state not in ("Preview", "Pre-Game", "Scheduled", "Live", "Final"):
+        if state in ("Live", "Final", "Game Over", "Completed"):
             continue
 
         home = raw["teams"]["home"]
