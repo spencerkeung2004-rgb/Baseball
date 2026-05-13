@@ -287,17 +287,18 @@ def _build_parlay(candidates, max_legs=3):
 # ── Kelly sizing ──────────────────────────────────────────────────────────────
 
 def _kelly_units(our_prob, american_odds):
-    """Fractional Kelly (1/4 Kelly) capped at MAX_UNITS, floored at MIN_UNITS."""
-    dec = american_to_decimal(american_odds)
-    b   = dec - 1
-    p   = our_prob
-    q   = 1 - p
-    kelly = (b * p - q) / b
-    # 1/4 Kelly converted to units (1 unit = 2.5% bankroll)
-    units = (kelly / 4) / 0.025
-    # Round to nearest 0.5
-    units = round(units * 2) / 2
-    return max(MIN_UNITS, min(MAX_UNITS, units))
+    """
+    Tiered unit sizing:
+    - 4u  : highest conviction (edge >= 25% and model prob >= 65%)
+    - 2u  : strong play (edge >= 15% and model prob >= 58%)
+    - 1u  : standard play (everything else that passed MIN_EDGE filter)
+    """
+    edge = our_prob - american_to_implied_prob(american_odds)
+    if edge >= 0.25 and our_prob >= 0.65:
+        return 4.0
+    if edge >= 0.15 and our_prob >= 0.58:
+        return 2.0
+    return 1.0
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
