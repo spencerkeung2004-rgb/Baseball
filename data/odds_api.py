@@ -1,5 +1,9 @@
 """The Odds API wrapper — pulls FanDuel lines for MLB games."""
+import hashlib
+import json
+import time
 import requests
+from pathlib import Path
 from config import ODDS_API_KEY
 
 BASE_URL  = "https://api.the-odds-api.com/v4"
@@ -21,20 +25,76 @@ PROP_MARKETS = [
     "pitcher_earned_runs",
 ]
 
+# File-based cache settings
+_CACHE_DIR = Path(__file__).parent / ".odds_cache"
+_CACHE_TTL = 4 * 3600   # 4 hours in seconds — re-fetch if older than this
+
 _requests_remaining = None
+_mem_cache = {}          # session-level memory cache: cache_key → data
+
+
+def _cache_path(cache_key: str) -> Path:
+    digest = hashlib.md5(cache_key.encode()).hexdigest()
+    return _CACHE_DIR / f"{digest}.json"
+
+
+def _file_cache_get(cache_key: str):
+    """Return cached data if it exists and is within TTL, else None."""
+    path = _cache_path(cache_key)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if time.time() - payload["ts"] > _CACHE_TTL:
+            return None   # expired
+        return payload["data"]
+    except Exception:
+        return None
+
+
+def _file_cache_set(cache_key: str, data):
+    """Write data to the file cache with current timestamp."""
+    _CACHE_DIR.mkdir(exist_ok=True)
+    path = _cache_path(cache_key)
+    try:
+        path.write_text(
+            json.dumps({"ts": time.time(), "data": data}),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass   # cache write failure is non-fatal
 
 
 def _get(endpoint, params=None):
     global _requests_remaining
     if not ODDS_API_KEY:
         return None
+
+    # Build a stable string key from endpoint + sorted params (excluding apiKey)
+    sorted_params = tuple(sorted((params or {}).items()))
+    cache_key = f"{endpoint}|{sorted_params}"
+
+    # 1. Memory cache (same process)
+    if cache_key in _mem_cache:
+        return _mem_cache[cache_key]
+
+    # 2. File cache (across runs, within TTL)
+    cached = _file_cache_get(cache_key)
+    if cached is not None:
+        _mem_cache[cache_key] = cached
+        return cached
+
+    # 3. Live API call
     url = f"{BASE_URL}{endpoint}"
-    params = {**(params or {}), "apiKey": ODDS_API_KEY}
+    full_params = {**(params or {}), "apiKey": ODDS_API_KEY}
     try:
-        r = requests.get(url, params=params, timeout=15)
+        r = requests.get(url, params=full_params, timeout=15)
         _requests_remaining = r.headers.get("x-requests-remaining", "?")
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        _mem_cache[cache_key] = data
+        _file_cache_set(cache_key, data)
+        return data
     except Exception as e:
         print(f"  [Odds API] {endpoint} failed: {e}")
         return None
@@ -48,6 +108,7 @@ def get_requests_remaining():
 
 def get_mlb_odds():
     """Fetch FanDuel moneyline + totals for all today's games."""
+    import datetime as _dt
     if not ODDS_API_KEY:
         print("  [Odds API] No ODDS_API_KEY set — skipping odds fetch.")
         return []
@@ -61,8 +122,20 @@ def get_mlb_odds():
     if not data:
         return []
 
+    # Cut-off: drop games that commenced more than 3 hours ago (already started/finished)
+    _now = _dt.datetime.now(_dt.timezone.utc)
+    _cutoff = _now - _dt.timedelta(hours=3)
+
     games = []
     for event in data:
+        ct = event.get("commence_time", "")
+        if ct:
+            try:
+                ct_dt = _dt.datetime.fromisoformat(ct.replace("Z", "+00:00"))
+                if ct_dt < _cutoff:
+                    continue   # stale — game already started/finished
+            except Exception:
+                pass
         g = {
             "event_id":         event["id"],
             "home_team":        event["home_team"],
@@ -73,6 +146,9 @@ def get_mlb_odds():
             "total_line":       None,
             "total_over_odds":  None,
             "total_under_odds": None,
+            # 1st inning O/U (0.5 line) = YRFI / NRFI
+            "nrfi_yes_odds":    None,   # NRFI = Under 0.5 first-inning runs
+            "nrfi_no_odds":     None,   # YRFI = Over  0.5 first-inning runs
         }
         for bk in event.get("bookmakers", []):
             if bk["key"] != BOOKMAKER:
@@ -91,9 +167,63 @@ def get_mlb_odds():
                             g["total_over_odds"] = o["price"]
                         else:
                             g["total_under_odds"] = o["price"]
+                elif market["key"] == "totals_1st_1_innings":
+                    for o in market["outcomes"]:
+                        if o.get("point", 0) == 0.5:
+                            if o["name"] == "Under":
+                                g["nrfi_yes_odds"] = o["price"]   # NRFI
+                            else:
+                                g["nrfi_no_odds"] = o["price"]    # YRFI
+        # Skip games with no active FD lines (already completed or pre-market)
+        has_lines = (
+            g["moneyline_home"] is not None
+            or g["total_line"] is not None
+        )
+        if not has_lines:
+            continue
+
         games.append(g)
 
+    # Sort ascending by commence_time so upcoming games match before stale ones
+    games.sort(key=lambda x: x.get("commence_time", ""))
     return games
+
+
+# ── First-inning (NRFI/YRFI) odds ────────────────────────────────────────────
+
+def get_nrfi_odds(event_id):
+    """
+    Return {nrfi_odds, yrfi_odds} from FanDuel's first-inning totals market
+    (totals_1st_1_innings, 0.5-run line).  NRFI = Under 0.5, YRFI = Over 0.5.
+    Returns {} if market not available.  Cached per session.
+    """
+    if not event_id:
+        return {}
+    data = _get(f"/sports/{SPORT}/events/{event_id}/odds", params={
+        "regions":    REGION,
+        "bookmakers": BOOKMAKER,
+        "markets":    "totals_1st_1_innings",
+        "oddsFormat": "american",
+    })
+    if not data:
+        return {}
+    for bk in data.get("bookmakers", []):
+        if bk["key"] != BOOKMAKER:
+            continue
+        for market in bk.get("markets", []):
+            if market["key"] != "totals_1st_1_innings":
+                continue
+            result = {}
+            for o in market.get("outcomes", []):
+                if o.get("point", 0) != 0.5:
+                    continue
+                if o["name"] == "Under":
+                    result["nrfi_odds"] = o["price"]   # NRFI
+                elif o["name"] == "Over":
+                    result["yrfi_odds"] = o["price"]   # YRFI
+            if result:
+                return result
+    return {}
 
 
 # ── Player props ──────────────────────────────────────────────────────────────

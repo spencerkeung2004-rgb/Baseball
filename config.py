@@ -17,11 +17,17 @@ STARTING_BANKROLL = 1000.0
 UNIT_SIZE = 25.0
 MAX_UNITS = 4.0
 MIN_UNITS = 0.5
+KELLY_FRACTION = 0.25   # fraction of full Kelly to stake (quarter-Kelly — standard, lower variance)
 
 # Bet Filters
-MIN_ODDS_AMERICAN = 100
-MIN_EDGE = 0.04
-DAILY_PICKS = 3
+MIN_ODDS_AMERICAN = -300   # allow favourites up to -300
+MIN_EDGE = 0.05
+DAILY_PICKS = 3            # picks saved with real stakes to the bankroll tracker
+CALIBRATION_PICKS = 40     # overall safety cap on total picks (staked + tracking) returned per day
+DAILY_CAL_TRACKING_MIN = 8   # target minimum tracking-only picks added per day, while types still need data
+DAILY_CAL_TRACKING_MAX = 10  # target maximum tracking-only picks added per day
+CAL_TARGET_SAMPLES = 40    # target settled bets per type (tracking keeps collecting until reached)
+PLATT_MIN_SAMPLES = 40     # min settled bets per type before Platt calibration engages (else legacy bias / identity)
 
 # MLB Settings
 import datetime as _dt
@@ -29,6 +35,38 @@ CURRENT_SEASON = _dt.date.today().year
 LEAGUE_AVG_RUNS = 4.50
 LEAGUE_AVG_ERA = 4.20
 LEAGUE_K_PCT = 0.225
+
+# Offense via wOBA (weighted On-Base Average) — strips sequencing/timing luck that
+# contaminates raw runs/game, and is more predictive of future run scoring.
+LEAGUE_WOBA = 0.318   # approx league-average wOBA
+WOBA_SCALE  = 1.25    # divides (wOBA − lgwOBA) to convert to runs (wRAA scale)
+# Linear weights (modern-era approximate, stable year to year)
+WOBA_WEIGHTS = {"bb": 0.69, "hbp": 0.72, "1b": 0.89, "2b": 1.27, "3b": 1.62, "hr": 2.10}
+
+# Statcast xBA weight in the batter-hits model: blend of expected BA (quality of
+# contact — more predictive) with actual season BA (results).
+XBA_WEIGHT = 0.50
+LEAGUE_BB_PCT  = 0.082   # batter walk rate per PA (MLB 2024 avg)
+LEAGUE_K9_SP   = 8.7     # starter K/9 league average
+LEAGUE_BB9_SP  = 3.1     # starter BB/9 league average
+
+# Team Defense
+LEAGUE_AVG_ERRORS_PER_GAME = 0.58   # approx modern-era MLB team errors/game
+LEAGUE_AVG_DP_PER_GAME     = 0.78   # approx modern-era MLB team double plays/game
+DEFENSE_ERROR_WEIGHT = 0.05  # run-factor swing per error/game above/below league average
+DEFENSE_DP_WEIGHT    = 0.03  # run-factor swing per double-play/game above/below league average
+
+# Blending weights: season vs recent performance
+# Rate stats (ERA, K/9, BB/9) are noisy over 5 starts — lean on season
+# IP/start reflects workload signals more quickly — lean more recent
+RECENT_GAMES_WINDOW = 5     # number of recent starts used in all blends
+BLEND_SEASON_RATE   = 0.70  # season weight for ERA, K/9, BB/9
+BLEND_SEASON_IP     = 0.55  # season weight for IP/start
+BLEND_SEASON_HOME_AWAY = 0.60  # season weight vs. home/away split (~half-season sample, noisier than full season)
+
+# Run-allowance skill estimate: blend ERA (noisy, defense-contaminated) with FIP
+# (skill-based, defense-independent).  ERA kept at 40% per requirement.
+FIP_BLEND_ERA_WEIGHT = 0.40   # ERA weight; FIP gets the remaining 0.60
 
 # Weather Adjustments
 TEMP_FACTOR_PER_10F = 0.015

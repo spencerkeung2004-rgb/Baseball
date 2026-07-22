@@ -3,13 +3,33 @@ Matchup model: platoon splits, batter vs pitcher history, NRFI projection.
 """
 from scipy.stats import poisson
 from data import mlb_api
-from config import CURRENT_SEASON
+from config import CURRENT_SEASON, LEAGUE_K_PCT, LEAGUE_BB_PCT
 
 LEAGUE_AVG_OPS  = 0.720
 LEAGUE_AVG_ERA  = 4.20
 FIRST_INN_MULT  = 1.15   # top of lineup bats in 1st; historically ~15% more runs/inning
 MIN_BVP_PA      = 8      # minimum PA to apply BvP adjustment
 MAX_BVP_WEIGHT  = 0.40   # cap BvP influence at 40% (at 30+ PA)
+
+# Platoon K-rate modifiers: (bat_side, pitch_hand) → batter K% relative change
+# Same hand = platoon disadvantage for batter → slightly higher K rate
+_PLATOON_K = {
+    ("R", "R"): 1.07,
+    ("R", "L"): 0.93,
+    ("L", "L"): 1.07,
+    ("L", "R"): 0.93,
+    ("S", "R"): 1.00,
+    ("S", "L"): 1.00,
+}
+# Platoon BB-rate modifiers: same hand = more balls thrown, more walks
+_PLATOON_BB = {
+    ("R", "R"): 0.96,
+    ("R", "L"): 1.04,
+    ("L", "L"): 0.96,
+    ("L", "R"): 1.04,
+    ("S", "R"): 1.00,
+    ("S", "L"): 1.00,
+}
 
 # Historical platoon multipliers on OPS (batter_hand, pitcher_hand)
 # Same hand = pitcher advantage; opposite = batter advantage
@@ -74,14 +94,30 @@ def get_matchup_data(game):
     }
 
 
+LEAGUE_K9_SP = 8.7   # kept in sync with config.py
+
 def project_nrfi(home_runs, away_runs, nrfi_home, nrfi_away,
-                  park_factor, weather_factor):
+                  park_factor, weather_factor,
+                  home_sp_k9=None, away_sp_k9=None):
     """
     P(NRFI) = P(away scores 0 in top 1st) x P(home scores 0 in bottom 1st).
     Uses Poisson with expected 1st-inning runs per side.
+
+    home_sp_k9 : blended K/9 of the home starting pitcher (faces away batters).
+                 Higher → more away strikeouts → fewer away first-inning runs.
+    away_sp_k9 : blended K/9 of the away starting pitcher (faces home batters).
+                 Higher → more home strikeouts → fewer home first-inning runs.
+
+    Suppression factor = LEAGUE_K9_SP / sp_k9, capped to [0.80, 1.20].
+    Interpretation: a 12.0 K/9 SP gives factor 8.7/12.0 ≈ 0.73 → capped at 0.80
+    (20% fewer expected first-inning runs vs the ERA-only model).
     """
-    away_1st = (away_runs / 9) * FIRST_INN_MULT * nrfi_away * park_factor * weather_factor
-    home_1st = (home_runs / 9) * FIRST_INN_MULT * nrfi_home * park_factor * weather_factor
+    # K/9 run-suppression factors
+    k9_h = max(0.80, min(1.20, LEAGUE_K9_SP / home_sp_k9)) if (home_sp_k9 and home_sp_k9 > 0) else 1.0
+    k9_a = max(0.80, min(1.20, LEAGUE_K9_SP / away_sp_k9)) if (away_sp_k9 and away_sp_k9 > 0) else 1.0
+
+    away_1st = (away_runs / 9) * FIRST_INN_MULT * nrfi_away * park_factor * weather_factor * k9_h
+    home_1st = (home_runs / 9) * FIRST_INN_MULT * nrfi_home * park_factor * weather_factor * k9_a
 
     p_away_0 = poisson.pmf(0, max(0.05, away_1st))
     p_home_0 = poisson.pmf(0, max(0.05, home_1st))
@@ -185,3 +221,43 @@ def _default():
         "home_pitcher_hand": "R", "away_pitcher_hand": "R",
         "home_lineup": [], "away_lineup": [],
     }
+
+
+def get_lineup_k_bb_factors(batter_ids: list, pitcher_hand: str,
+                             top_n: int = 9) -> tuple[float, float]:
+    """
+    Compute lineup-level K% and BB% adjustment factors for a pitcher.
+
+    For each batter in top_n of the lineup:
+      - Get their season K% and BB%
+      - Adjust by platoon modifier (same-hand matchup → batters K more, walk less)
+
+    Returns (k_adj, bb_adj) where:
+      k_adj  > 1.0 → this lineup strikes out more than average → more Ks for pitcher
+      bb_adj > 1.0 → this lineup walks more than average → more BBs for pitcher
+    """
+    ids = batter_ids[:top_n]
+    if not ids:
+        return 1.0, 1.0
+
+    k_pcts, bb_pcts = [], []
+    for bid in ids:
+        info     = mlb_api.get_player_info(bid) or {}
+        bat_side = info.get("bat_side", "R")
+        stats    = mlb_api.get_player_season_stats(bid) or {}
+
+        raw_k  = stats.get("k_pct",  LEAGUE_K_PCT)
+        raw_bb = stats.get("bb_pct", LEAGUE_BB_PCT)
+
+        pm_k  = _PLATOON_K.get((bat_side, pitcher_hand),  1.0)
+        pm_bb = _PLATOON_BB.get((bat_side, pitcher_hand), 1.0)
+
+        k_pcts.append(max(0.05, raw_k  * pm_k))
+        bb_pcts.append(max(0.01, raw_bb * pm_bb))
+
+    k_avg  = sum(k_pcts)  / len(k_pcts)
+    bb_avg = sum(bb_pcts) / len(bb_pcts)
+
+    k_adj  = max(0.75, min(1.30, k_avg  / LEAGUE_K_PCT))
+    bb_adj = max(0.75, min(1.30, bb_avg / LEAGUE_BB_PCT))
+    return round(k_adj, 4), round(bb_adj, 4)

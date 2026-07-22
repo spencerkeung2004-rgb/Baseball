@@ -36,50 +36,77 @@ def print_picks(picks, bankroll, date_str=None):
           + "  (" + _c(br_color, sign + "$" + "{:,.2f}".format(change)) + " from start)")
     print("  Unit Size: $" + str(int(UNIT_SIZE)) + "  |  Starting: $" + str(int(STARTING_BANKROLL)))
     print(_c(Fore.CYAN if _COLOR else "", sep))
-    if not picks:
+    staked   = [p for p in picks if not p.get("tracking_only")]
+    tracking = [p for p in picks if p.get("tracking_only")]
+
+    if not staked:
         print(_c(Fore.YELLOW if _COLOR else "", "  No qualifying bets found today."))
         print("  Check your ODDS_API_KEY in .env and try again.")
         return
+
+    def _print_pick(i, p, label_prefix=""):
+        odds  = p["american_odds"]
+        edge  = p["edge"]
+        o_col = Fore.GREEN if odds >= 150 else Fore.YELLOW
+        e_col = Fore.GREEN if edge >= 0.15 else Fore.YELLOW
+        odds_s = _c(o_col, "+{:d}".format(odds) if odds >= 0 else "{:d}".format(odds))
+        edge_s = _c(e_col, "{:.1f}%".format(edge * 100))
+
+        is_parlay   = p.get("type") == "parlay"
+        leg_details = p.get("leg_details", [])
+
+        if is_parlay:
+            desc = "{}-Leg Parlay".format(len(leg_details) or len(p.get("legs", [])))
+        else:
+            desc = p["description"]
+
+        if p.get("tracking_only"):
+            print("  {}{:<2}  {:<28}  {}  edge {}  [tracking]".format(
+                label_prefix, i, desc, odds_s, edge_s))
+        else:
+            win_s = _c(Fore.GREEN if _COLOR else "", "${:.2f}".format(p["potential_win"]))
+            print("  {}{:<2}  {:<28}  {}  edge {}  {:.1f}u  ${:.2f} → {}".format(
+                label_prefix, i, desc, odds_s, edge_s,
+                p["units"], p["stake"], win_s))
+
+        if is_parlay and leg_details:
+            for leg in leg_details:
+                l_odds = leg["odds"]
+                l_sign = "+" if l_odds >= 0 else ""
+                print("       {:<26}  {:>8}  {}{}".format(
+                    leg["description"], leg["game"], l_sign, l_odds))
+        elif not is_parlay:
+            print("       {}".format(p["game"]))
+
+        reasoning = p.get("reasoning", "")
+        if not is_parlay and reasoning:
+            print("       {}".format(_c(Fore.CYAN if _COLOR else "", reasoning)))
+        print()
+
+    # ── Staked picks ──────────────────────────────────────────────────────────
     print()
-    rows = []
-    for i, p in enumerate(picks, 1):
-        odds    = p["american_odds"]
-        edge    = p["edge"]
-        model_p = p["our_prob"] * 100
-        impl_p  = p["implied_prob"] * 100
-        o_col   = Fore.GREEN if odds >= 150 else Fore.YELLOW
-        e_col   = Fore.GREEN if edge >= 0.15 else Fore.YELLOW
-        rows.append([
-            str(i),
-            p["game"],
-            p["description"],
-            _c(o_col, "+" + str(odds)),
-            _c(e_col, "{:.1f}%".format(edge * 100)),
-            "{:.1f}%".format(model_p),
-            "{:.1f}%".format(impl_p),
-            str(p["units"]) + "u",
-            "${:.2f}".format(p["stake"]),
-            _c(Fore.GREEN if _COLOR else "", "${:.2f}".format(p["potential_win"])),
-        ])
-    hdrs = ["#", "Game", "Bet", "Odds", "Edge", "Model%", "Implied%", "Size", "Stake", "To Win"]
-    if _TABLE:
-        print(_tabulate(rows, headers=hdrs, tablefmt="simple"))
-    else:
-        print("  ".join(hdrs))
-        for r in rows:
-            print("  ".join(str(x) for x in r))
-    print()
-    for i, p in enumerate(picks, 1):
-        print("  #" + str(i) + " " + _c(Fore.CYAN if _COLOR else "", p.get("reasoning", "")))
-    print()
-    total_stake = sum(p["stake"] for p in picks)
-    total_win   = sum(p["potential_win"] for p in picks)
-    print("  Total at risk: ${:.2f}  |  Max return: ${:.2f}".format(total_stake, total_win))
+    for i, p in enumerate(staked, 1):
+        _print_pick(i, p)
+
+    total_units = sum(p["units"] for p in staked)
+    total_stake = sum(p["stake"] for p in staked)
+    total_win   = sum(p["potential_win"] for p in staked)
+    print("  Total at risk: {:.1f}u / ${:.2f}  |  Max return: ${:.2f}".format(
+          total_units, total_stake, total_win))
     print(_c(Fore.CYAN if _COLOR else "", sep))
+
+    # ── Tracking picks (calibration only) ────────────────────────────────────
+    if tracking:
+        print()
+        print(_c(Fore.YELLOW if _COLOR else "",
+                 "  CALIBRATION TRACKING  (no stake — outcomes update the model)"))
+        print("  " + "-" * 52)
+        for i, p in enumerate(tracking, 1):
+            _print_pick(i, p)
     print()
 
 
-def print_report(perf, bets, days):
+def print_report(perf, by_units, bets, days):
     W = 90
     sep = "=" * W
     print()
@@ -99,6 +126,33 @@ def print_report(perf, bets, days):
     print("  P&L      : " + _c(roi_col, "${:+.2f}".format(perf["pnl"])) + "  (${:.2f} staked)".format(perf["staked"]))
     print("  Avg Edge : {:+.1f}%".format(perf["avg_edge"]))
     print("  Total    : {} bets".format(perf["total_bets"]))
+    if by_units:
+        print()
+        print("  BY UNIT SIZE")
+        if _TABLE:
+            unit_rows = []
+            for u in by_units:
+                wl    = "{}W - {}L".format(u["wins"], u["losses"])
+                if u["pushes"]:
+                    wl += " - {}P".format(u["pushes"])
+                wr    = "{:.1f}%".format(u["win_rate"]) if (u["wins"] + u["losses"]) else "—"
+                pnl_c = Fore.GREEN if u["pnl"] >= 0 else Fore.RED if _COLOR else ""
+                unit_rows.append([
+                    "{:.1f}u".format(u["units"]),
+                    u["total"],
+                    wl,
+                    wr,
+                    "${:.2f}".format(u["staked"]),
+                    _c(pnl_c, "${:+.2f}".format(u["pnl"])),
+                    _c(pnl_c, "{:+.1f}%".format(u["roi"])),
+                ])
+            print(_tabulate(unit_rows,
+                            headers=["Units", "Bets", "Record", "Win%", "Staked", "P&L", "ROI"],
+                            tablefmt="simple"))
+        else:
+            for u in by_units:
+                wl = "{}W-{}L".format(u["wins"], u["losses"])
+                print("  {:.1f}u  {}  P&L: ${:+.2f}".format(u["units"], wl, u["pnl"]))
     if bets and _TABLE:
         print()
         print("  RECENT BETS")

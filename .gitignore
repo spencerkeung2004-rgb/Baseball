@@ -1,5 +1,6 @@
 .env
 *.db
+data/.odds_cache/
 __pycache__/
 *.py[cod]
 .venv/
