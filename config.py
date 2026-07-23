@@ -33,7 +33,8 @@ CALIBRATION_PICKS = 40     # overall safety cap on total picks (staked + trackin
 DAILY_CAL_TRACKING_MIN = 8   # target minimum tracking-only picks added per day, while types still need data
 DAILY_CAL_TRACKING_MAX = 15  # max tracking-only picks added per day (only ones clearing MIN_EDGE)
 CAL_TARGET_SAMPLES = 40    # target settled bets per type (tracking keeps collecting until reached)
-PLATT_MIN_SAMPLES = 40     # min settled bets per type before Platt calibration engages (else legacy bias / identity)
+PLATT_MIN_SAMPLES = 40     # samples at which Platt calibration reaches FULL strength
+PLATT_WARMUP_SAMPLES = 15  # samples at which Platt begins applying (confidence-ramped from here to full)
 # Calibration reset: only bets settled on/after this date feed calibration.  Bump
 # this whenever the model changes materially (the old model's probability→outcome
 # mapping no longer applies).  Bet P&L history is unaffected — this only scopes

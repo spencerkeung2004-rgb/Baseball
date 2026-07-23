@@ -37,7 +37,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from config import PLATT_MIN_SAMPLES
+from config import PLATT_MIN_SAMPLES, PLATT_WARMUP_SAMPLES
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _HERE         = Path(__file__).parent
@@ -102,18 +102,25 @@ def run_calibration(settled_bets: list[dict]) -> dict:
             "brier_score":        round(brier, 4),
         }
 
-        # Platt scaling once enough data — else legacy scalar bias.
-        if n >= PLATT_MIN_SAMPLES:
+        # Platt scaling ramps in from PLATT_WARMUP_SAMPLES to full at
+        # PLATT_MIN_SAMPLES (confidence applied at calibrated_prob time) — below
+        # warmup, no correction (raw probabilities).
+        if n >= PLATT_WARMUP_SAMPLES:
             a, b = _fit_platt(records)
-            post_brier = sum(w * (_apply_platt(p, a, b) - o) ** 2
-                             for w, p, o in records) / w_sum
+            conf = min(1.0, n / PLATT_MIN_SAMPLES)
+            # Report the Brier at the confidence-weighted correction actually applied.
+            post_brier = sum(
+                w * ((p * (1 - conf) + _apply_platt(p, a, b) * conf) - o) ** 2
+                for w, p, o in records
+            ) / w_sum
             entry["method"]         = "platt"
             entry["platt"]          = {"a": round(a, 4), "b": round(b, 4)}
+            entry["confidence"]     = round(conf, 3)
             entry["brier_post_cal"] = round(post_brier, 4)
             entry["active"]         = True
         else:
             entry["method"] = "bias"
-            entry["active"] = n >= MIN_SAMPLES
+            entry["active"] = False
 
         factors[bet_type] = entry
 
@@ -173,7 +180,13 @@ def calibrated_prob(our_prob: float, bet_type: str, weights: dict | None = None)
     if info.get("method") == "platt" and "platt" in info:
         a = info["platt"].get("a", 1.0)
         b = info["platt"].get("b", 0.0)
-        return _apply_platt(our_prob, a, b)
+        # Confidence-weighted: blend raw prob with the Platt-corrected one so the
+        # correction grows smoothly from PLATT_WARMUP_SAMPLES to full at
+        # PLATT_MIN_SAMPLES, rather than switching on all at once.
+        conf     = min(1.0, info.get("samples", 0) / PLATT_MIN_SAMPLES)
+        platt_p  = _apply_platt(our_prob, a, b)
+        blended  = our_prob * (1 - conf) + platt_p * conf
+        return max(0.05, min(0.95, blended))
 
     if info.get("active", False):
         bias = info.get("bias", 1.0)
@@ -216,13 +229,14 @@ def print_calibration_report(weights: dict) -> None:
         brier  = d["brier_score"]
         method = d.get("method", "bias")
         if method == "platt":
+            conf = d.get("confidence", 1.0)
             brier_str = f"{brier:.4f}→{d.get('brier_post_cal', brier):.4f}"
             method_str = "Platt"
-            status = "✓ active"
+            status = "✓ full" if conf >= 1.0 else f"◐ {conf*100:.0f}% ({PLATT_MIN_SAMPLES - n} to full)"
         else:
             brier_str = f"{brier:.4f}"
-            method_str = "bias"
-            status = "✓ active" if d["active"] else f"○ need {PLATT_MIN_SAMPLES - n} more"
+            method_str = "—"
+            status = f"○ need {max(0, PLATT_WARMUP_SAMPLES - n)} to start"
         print(col.format(
             f"  {btype}", n,
             f"{pred:.1f}%", f"{act:.1f}%",
@@ -230,13 +244,14 @@ def print_calibration_report(weights: dict) -> None:
         ))
 
     print()
-    active_count = sum(1 for d in by_type.values() if d.get("active"))
-    platt_count  = sum(1 for d in by_type.values() if d.get("method") == "platt")
-    if active_count:
-        print(f"  {active_count} type(s) actively correcting picks "
-              f"({platt_count} via Platt scaling, rest via scalar bias).")
+    platt_count = sum(1 for d in by_type.values() if d.get("method") == "platt")
+    full_count  = sum(1 for d in by_type.values()
+                      if d.get("method") == "platt" and d.get("confidence", 1.0) >= 1.0)
+    if platt_count:
+        print(f"  {platt_count} type(s) applying calibration "
+              f"({full_count} at full strength, the rest ramping in with more data).")
     else:
-        print(f"  No types have enough data yet (Platt needs {PLATT_MIN_SAMPLES}+ per type).")
+        print(f"  No types calibrating yet (Platt begins at {PLATT_WARMUP_SAMPLES} samples/type).")
     print("=" * w)
     print()
 
