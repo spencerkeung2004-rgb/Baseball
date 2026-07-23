@@ -74,6 +74,12 @@ BLEND_SEASON_HOME_AWAY = 0.60  # season weight vs. home/away split (~half-season
 # (skill-based, defense-independent).  ERA kept at 40% per requirement.
 FIP_BLEND_ERA_WEIGHT = 0.40   # ERA weight; FIP gets the remaining 0.60
 
+# SP strikeout projection ran ~0.6 Ks low across 1,600+ historical starts (a bias
+# that also drove the pitcher_k_under miscalibration — projecting Ks low makes
+# UNDERs look strong and OVERs weak).  Empirical multiplicative correction to
+# remove that measured bias; re-tune if the SP-K projection bias shifts.
+SP_K_PROJ_FACTOR = 1.12
+
 # Weather Adjustments
 TEMP_FACTOR_PER_10F = 0.015
 WIND_OUT_FACTOR_PER_10MPH = 0.05

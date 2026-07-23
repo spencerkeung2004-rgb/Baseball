@@ -13,7 +13,7 @@ from config import (
     LEAGUE_AVG_ERRORS_PER_GAME, LEAGUE_AVG_DP_PER_GAME,
     DEFENSE_ERROR_WEIGHT, DEFENSE_DP_WEIGHT,
     RECENT_GAMES_WINDOW, BLEND_SEASON_RATE, BLEND_SEASON_IP,
-    BLEND_SEASON_HOME_AWAY, FIP_BLEND_ERA_WEIGHT,
+    BLEND_SEASON_HOME_AWAY, FIP_BLEND_ERA_WEIGHT, SP_K_PROJ_FACTOR,
     LEAGUE_WOBA, WOBA_SCALE,
     PARK_FACTORS, DOME_STADIUMS,
 )
@@ -385,7 +385,9 @@ def _project_pitcher_peripherals(
     bb9_eff  = bb9_hand * opp_bb_adj * ump_bb_factor * rest_bb_factor
 
     # ── Step 4: Final projections ─────────────────────────────────────────────
-    proj_ks = max(0.0, (k9_eff / 9) * proj_ip)
+    # SP_K_PROJ_FACTOR removes the ~0.6-K systematic under-projection measured
+    # over historical starts.  Applied to Ks only (BB showed no such bias).
+    proj_ks = max(0.0, (k9_eff / 9) * proj_ip * SP_K_PROJ_FACTOR)
     proj_bb = max(0.0, (bb9_eff / 9) * proj_ip)
 
     sample_ip  = sp_stats.get("innings_pitched", 0)
