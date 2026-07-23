@@ -31,7 +31,7 @@ MIN_EDGE = 0.05
 DAILY_PICKS = 3            # picks saved with real stakes to the bankroll tracker
 CALIBRATION_PICKS = 40     # overall safety cap on total picks (staked + tracking) returned per day
 DAILY_CAL_TRACKING_MIN = 8   # target minimum tracking-only picks added per day, while types still need data
-DAILY_CAL_TRACKING_MAX = 10  # target maximum tracking-only picks added per day
+DAILY_CAL_TRACKING_MAX = 15  # max tracking-only picks added per day (only ones clearing MIN_EDGE)
 CAL_TARGET_SAMPLES = 40    # target settled bets per type (tracking keeps collecting until reached)
 PLATT_MIN_SAMPLES = 40     # min settled bets per type before Platt calibration engages (else legacy bias / identity)
 # Calibration reset: only bets settled on/after this date feed calibration.  Bump

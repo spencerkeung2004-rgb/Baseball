@@ -189,14 +189,14 @@ def find_daily_bets(games):
 
     # Iterate types in priority order; for each type add as many picks as
     # available until its need is met, the daily tracking target is hit, or
-    # CALIBRATION_PICKS (overall safety cap) is reached.  Pool combines
-    # `qualified` with `cal_pool` (bets excluded from qualified purely by a
-    # calibration gate — e.g. nrfi_yrfi under CAL_TARGET_SAMPLES, or
-    # pitcher_k_under's raised edge floor) since those are exactly the bets
-    # that need outcome data.  Each type is capped at MAX_PER_TYPE picks per
-    # day so no single type monopolises all calibration slots.
+    # CALIBRATION_PICKS (overall safety cap) is reached.  The tracking pool is
+    # `qualified` plus the gate-excluded bets in `cal_pool` (types held out of
+    # staking by a calibration gate — e.g. nrfi/batter_hits under
+    # CAL_TARGET_SAMPLES, or pitcher_k_under's raised staking floor) — but only
+    # those clearing MIN_EDGE, so tracking picks are genuine model edges, never
+    # sub-threshold padding.  Each type is capped at MAX_PER_TYPE per day.
     MAX_PER_TYPE = 5
-    fill_pool = qualified + cal_pool
+    fill_pool = [b for b in (qualified + cal_pool) if b["edge"] >= MIN_EDGE]
     tracking_added = 0
 
     for target_type in cal_types_ordered:
