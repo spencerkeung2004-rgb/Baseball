@@ -34,6 +34,11 @@ DAILY_CAL_TRACKING_MIN = 8   # target minimum tracking-only picks added per day,
 DAILY_CAL_TRACKING_MAX = 10  # target maximum tracking-only picks added per day
 CAL_TARGET_SAMPLES = 40    # target settled bets per type (tracking keeps collecting until reached)
 PLATT_MIN_SAMPLES = 40     # min settled bets per type before Platt calibration engages (else legacy bias / identity)
+# Calibration reset: only bets settled on/after this date feed calibration.  Bump
+# this whenever the model changes materially (the old model's probability→outcome
+# mapping no longer applies).  Bet P&L history is unaffected — this only scopes
+# which settled bets the calibrator learns from.
+CALIBRATION_EPOCH = "2026-07-23"
 
 # MLB Settings
 import datetime as _dt

@@ -4,7 +4,7 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
-from config import STARTING_BANKROLL
+from config import STARTING_BANKROLL, CALIBRATION_EPOCH
 
 DB_PATH = Path(__file__).parent / "bankroll.db"
 
@@ -102,7 +102,11 @@ def get_pending_bets(date_str=None, latest_batch_only=False, include_tracking=Fa
 
 
 def get_settled_bets_for_calibration():
-    """Return all settled (non-push) bets with fields needed for calibration."""
+    """
+    Return settled (non-push) bets with fields needed for calibration.
+    Only bets on/after CALIBRATION_EPOCH count — earlier bets were placed under a
+    prior model whose probability→outcome mapping no longer applies.
+    """
     init_db()
     conn = _conn()
     rows = conn.execute(
@@ -110,7 +114,9 @@ def get_settled_bets_for_calibration():
            FROM bets
            WHERE result IN ('win', 'loss')
              AND our_prob IS NOT NULL
-           ORDER BY date ASC"""
+             AND date >= ?
+           ORDER BY date ASC""",
+        (CALIBRATION_EPOCH,),
     ).fetchall()
     conn.close()
     return [
