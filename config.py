@@ -29,9 +29,8 @@ KELLY_FRACTION = 0.25   # fraction of full Kelly to stake (quarter-Kelly — sta
 MIN_ODDS_AMERICAN = -300   # allow favourites up to -300
 MIN_EDGE = 0.05
 DAILY_PICKS = 3            # picks saved with real stakes to the bankroll tracker
-CALIBRATION_PICKS = 40     # overall safety cap on total picks (staked + tracking) returned per day
-DAILY_CAL_TRACKING_MIN = 8   # target minimum tracking-only picks added per day, while types still need data
-DAILY_CAL_TRACKING_MAX = 15  # max tracking-only picks added per day (only ones clearing MIN_EDGE)
+# Calibration tracking has no daily cap: every bet clearing MIN_EDGE, for any type
+# not yet at CAL_TARGET_SAMPLES, is added as a stake-0 tracking pick (rebuild fast).
 CAL_TARGET_SAMPLES = 40    # target settled bets per type (tracking keeps collecting until reached)
 PLATT_MIN_SAMPLES = 40     # samples at which Platt calibration reaches FULL strength
 PLATT_WARMUP_SAMPLES = 15  # samples at which Platt begins applying (confidence-ramped from here to full)

@@ -8,8 +8,7 @@ import itertools
 from config import (
     MIN_ODDS_AMERICAN, MIN_EDGE, MAX_UNITS, MIN_UNITS, UNIT_SIZE,
     STARTING_BANKROLL, KELLY_FRACTION, BATTER_PROPS_BOOKMAKER,
-    DAILY_PICKS, CALIBRATION_PICKS,
-    DAILY_CAL_TRACKING_MIN, DAILY_CAL_TRACKING_MAX, CAL_TARGET_SAMPLES,
+    DAILY_PICKS, CAL_TARGET_SAMPLES,
 )
 from data.odds_api import (
     american_to_decimal, american_to_implied_prob, decimal_to_american,
@@ -151,33 +150,18 @@ def find_daily_bets(games):
     picks.sort(key=lambda x: x["edge"], reverse=True)
 
     # ── Append calibration-only bets (stake=0, tracking only) ────────────────
-    # Goal: fill tracking slots prioritising bet types furthest from
-    # CAL_TARGET_SAMPLES settled bets.  Once a type reaches the target it is
-    # skipped so slots go to under-represented types.
-    CAL_TYPES = [
-        "moneyline", "total_over", "total_under",
-        "pitcher_k_over", "pitcher_k_under",
-        "nrfi_nrfi", "nrfi_yrfi",
-        "batter_hits",
-    ]
-
+    # Add EVERY threshold-qualifying bet as a calibration pick — no daily cap and
+    # no per-type cap — so per-type sample counts reach CAL_TARGET_SAMPLES as fast
+    # as edges appear.  The tracking pool is `qualified` plus the gate-excluded
+    # bets in `cal_pool` (types held out of staking by a calibration gate — e.g.
+    # nrfi / batter_hits, or pitcher_k_under's raised staking floor), restricted
+    # to those clearing MIN_EDGE (genuine model edges, never sub-threshold
+    # padding).  Types already at CAL_TARGET_SAMPLES are skipped.
     from models.calibration import _normalise_type as _nt
     by_type_data = _CAL_WEIGHTS.get("by_type", {})
 
-    def _samples(t):
-        return by_type_data.get(_nt(t), {}).get("samples", 0)
-
     def _still_need(t):
-        return max(0, CAL_TARGET_SAMPLES - _samples(t))
-
-    # Sort types: most needed first (fewest samples), skip fully-satisfied types
-    cal_types_ordered = sorted(
-        [t for t in CAL_TYPES if _still_need(t) > 0],
-        key=_samples,
-    )
-
-    cal_legs_used  = set(used_legs)
-    added_per_type = {t: 0 for t in CAL_TYPES}
+        return CAL_TARGET_SAMPLES - by_type_data.get(_nt(t), {}).get("samples", 0)
 
     def _make_tracking(b):
         cal = dict(b)
@@ -187,52 +171,18 @@ def find_daily_bets(games):
         cal["potential_win"] = 0.0
         return cal
 
-    # Iterate types in priority order; for each type add as many picks as
-    # available until its need is met, the daily tracking target is hit, or
-    # CALIBRATION_PICKS (overall safety cap) is reached.  The tracking pool is
-    # `qualified` plus the gate-excluded bets in `cal_pool` (types held out of
-    # staking by a calibration gate — e.g. nrfi/batter_hits under
-    # CAL_TARGET_SAMPLES, or pitcher_k_under's raised staking floor) — but only
-    # those clearing MIN_EDGE, so tracking picks are genuine model edges, never
-    # sub-threshold padding.  Each type is capped at MAX_PER_TYPE per day.
-    MAX_PER_TYPE = 5
+    cal_legs_used = set(used_legs)
     fill_pool = [b for b in (qualified + cal_pool) if b["edge"] >= MIN_EDGE]
-    tracking_added = 0
+    fill_pool.sort(key=lambda x: x["edge"], reverse=True)
 
-    for target_type in cal_types_ordered:
-        if tracking_added >= DAILY_CAL_TRACKING_MAX or len(picks) >= CALIBRATION_PICKS:
-            break
-        daily_cap = min(_still_need(target_type), MAX_PER_TYPE)
-        for b in fill_pool:
-            if tracking_added >= DAILY_CAL_TRACKING_MAX or len(picks) >= CALIBRATION_PICKS:
-                break
-            if added_per_type[target_type] >= daily_cap:
-                break
-            if b["type"] != target_type:
-                continue
-            legs = b.get("legs") or [b["description"]]
-            if cal_legs_used & set(legs):
-                continue
-            picks.append(_make_tracking(b))
-            cal_legs_used.update(legs)
-            added_per_type[target_type] += 1
-            tracking_added += 1
-
-    # Back-fill toward the daily minimum using any remaining candidate whose
-    # type still needs calibration data (never types already at target —
-    # once every type is calibrated, tracking picks stop altogether).
-    if tracking_added < DAILY_CAL_TRACKING_MIN:
-        for b in fill_pool:
-            if tracking_added >= DAILY_CAL_TRACKING_MIN or len(picks) >= CALIBRATION_PICKS:
-                break
-            if _still_need(b.get("type", "")) <= 0:
-                continue
-            legs = b.get("legs") or [b["description"]]
-            if cal_legs_used & set(legs):
-                continue
-            picks.append(_make_tracking(b))
-            cal_legs_used.update(legs)
-            tracking_added += 1
+    for b in fill_pool:
+        if _still_need(b.get("type", "")) <= 0:
+            continue   # type already has enough calibration data
+        legs = b.get("legs") or [b["description"]]
+        if cal_legs_used & set(legs):
+            continue   # leg already used by a staked or earlier tracking pick
+        picks.append(_make_tracking(b))
+        cal_legs_used.update(legs)
 
     return picks
 
