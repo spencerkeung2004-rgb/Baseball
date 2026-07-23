@@ -13,7 +13,7 @@ from config import (
     LEAGUE_AVG_ERRORS_PER_GAME, LEAGUE_AVG_DP_PER_GAME,
     DEFENSE_ERROR_WEIGHT, DEFENSE_DP_WEIGHT,
     RECENT_GAMES_WINDOW, BLEND_SEASON_RATE, BLEND_SEASON_IP,
-    BLEND_SEASON_HOME_AWAY, FIP_BLEND_ERA_WEIGHT, SP_K_PROJ_FACTOR,
+    BLEND_SEASON_HOME_AWAY, FIP_BLEND_ERA_WEIGHT, SP_K_PROJ_FACTOR, RUN_PROJ_FACTOR,
     LEAGUE_WOBA, WOBA_SCALE,
     PARK_FACTORS, DOME_STADIUMS,
 )
@@ -123,6 +123,12 @@ def project_game(game):
     # Apply matchup (platoon + BvP), momentum, and H2H factors
     home_runs = home_runs_base * matchup["home_factor"] * home_mom_f * home_h2h_f
     away_runs = away_runs_base * matchup["away_factor"] * away_mom_f * away_h2h_f
+
+    # Empirical de-bias: run projections ran ~0.36/team hot.  Scaling both sides
+    # equally fixes the totals over-lean while preserving the run difference (so
+    # the moneyline win prob, which already beats baseline, is left intact).
+    home_runs *= RUN_PROJ_FACTOR
+    away_runs *= RUN_PROJ_FACTOR
 
     total     = home_runs + away_runs
     # Coherent Monte Carlo win prob — same NegBin run-distribution family as the

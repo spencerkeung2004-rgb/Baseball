@@ -80,6 +80,12 @@ FIP_BLEND_ERA_WEIGHT = 0.40   # ERA weight; FIP gets the remaining 0.60
 # remove that measured bias; re-tune if the SP-K projection bias shifts.
 SP_K_PROJ_FACTOR = 1.12
 
+# Team run projection ran ~0.36/team (~0.72/game) hot across 800+ historical games
+# — the LEAGUE_AVG_RUNS anchor and the stacked multiplicative factors compound a
+# little high.  Applied equally to both teams, so the run DIFFERENCE (and thus the
+# moneyline win prob) is preserved while the totals over-lean is removed.
+RUN_PROJ_FACTOR = 0.92
+
 # Weather Adjustments
 TEMP_FACTOR_PER_10F = 0.015
 WIND_OUT_FACTOR_PER_10MPH = 0.05
