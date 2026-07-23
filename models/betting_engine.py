@@ -8,7 +8,7 @@ import itertools
 from config import (
     MIN_ODDS_AMERICAN, MIN_EDGE, MAX_UNITS, MIN_UNITS, UNIT_SIZE,
     STARTING_BANKROLL, KELLY_FRACTION, BATTER_PROPS_BOOKMAKER,
-    DAILY_PICKS, CAL_TARGET_SAMPLES,
+    DAILY_PICKS, CAL_TARGET_SAMPLES, CAL_MAINTENANCE_PER_TYPE,
 )
 from data.odds_api import (
     american_to_decimal, american_to_implied_prob, decimal_to_american,
@@ -150,12 +150,18 @@ def find_daily_bets(games):
     picks.sort(key=lambda x: x["edge"], reverse=True)
 
     # ── Append calibration-only bets (stake=0, tracking only) ────────────────
-    # Add EVERY threshold-qualifying bet as a calibration pick — no caps, and no
-    # stop once a type reaches CAL_TARGET_SAMPLES (that's a minimum for full-
-    # strength calibration, not a ceiling; recency-weighted calibration stays
-    # sharper with more/fresher data).  The tracking pool is `qualified` plus the
-    # gate-excluded bets in `cal_pool` (nrfi / batter_hits, pitcher_k_under's
-    # raised staking floor), restricted to those clearing MIN_EDGE.
+    # Every threshold-qualifying bet becomes a calibration pick.  While a type is
+    # still short of CAL_TARGET_SAMPLES, collect with NO cap (rebuild fast); once
+    # it reaches the target, throttle to CAL_MAINTENANCE_PER_TYPE picks/day for
+    # that type — enough to keep recency-weighted calibration fresh, not flood it.
+    # The pool is `qualified` plus gate-excluded `cal_pool` bets (nrfi /
+    # batter_hits, pitcher_k_under's raised floor), restricted to those >= MIN_EDGE.
+    from models.calibration import _normalise_type as _nt
+    _by_type = _CAL_WEIGHTS.get("by_type", {})
+
+    def _samples(bet_type):
+        return _by_type.get(_nt(bet_type), {}).get("samples", 0)
+
     def _make_tracking(b):
         cal = dict(b)
         cal["tracking_only"] = True
@@ -164,16 +170,24 @@ def find_daily_bets(games):
         cal["potential_win"] = 0.0
         return cal
 
-    cal_legs_used = set(used_legs)
+    cal_legs_used  = set(used_legs)
+    added_per_type = {}   # normalised type -> tracking picks added today
     fill_pool = [b for b in (qualified + cal_pool) if b["edge"] >= MIN_EDGE]
     fill_pool.sort(key=lambda x: x["edge"], reverse=True)
 
     for b in fill_pool:
+        norm = _nt(b.get("type", ""))
+        # Fully-calibrated types are throttled to the maintenance rate; types
+        # still building toward the target collect without limit.
+        if (_samples(b.get("type", "")) >= CAL_TARGET_SAMPLES
+                and added_per_type.get(norm, 0) >= CAL_MAINTENANCE_PER_TYPE):
+            continue
         legs = b.get("legs") or [b["description"]]
         if cal_legs_used & set(legs):
             continue   # leg already used by a staked or earlier tracking pick
         picks.append(_make_tracking(b))
         cal_legs_used.update(legs)
+        added_per_type[norm] = added_per_type.get(norm, 0) + 1
 
     return picks
 
