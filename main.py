@@ -270,6 +270,10 @@ def main():
     p_pending = sub.add_parser("pending", help="List unsettled bets")
     p_pending.add_argument("--date", default=None)
 
+    p_backtest = sub.add_parser("backtest", help="Backtest projection accuracy over a date range")
+    p_backtest.add_argument("--start", required=True, help="YYYY-MM-DD")
+    p_backtest.add_argument("--end", required=True, help="YYYY-MM-DD")
+
     args = parser.parse_args()
 
     if args.cmd == "calibrate":
@@ -292,6 +296,9 @@ def main():
         cmd_report(args.days)
     elif args.cmd == "pending":
         cmd_pending(args.date or _today())
+    elif args.cmd == "backtest":
+        from backtest import run_backtest
+        run_backtest(args.start, args.end)
     else:
         parser.print_help()
         sys.exit(0)
