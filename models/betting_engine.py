@@ -150,19 +150,12 @@ def find_daily_bets(games):
     picks.sort(key=lambda x: x["edge"], reverse=True)
 
     # ── Append calibration-only bets (stake=0, tracking only) ────────────────
-    # Add EVERY threshold-qualifying bet as a calibration pick — no daily cap and
-    # no per-type cap — so per-type sample counts reach CAL_TARGET_SAMPLES as fast
-    # as edges appear.  The tracking pool is `qualified` plus the gate-excluded
-    # bets in `cal_pool` (types held out of staking by a calibration gate — e.g.
-    # nrfi / batter_hits, or pitcher_k_under's raised staking floor), restricted
-    # to those clearing MIN_EDGE (genuine model edges, never sub-threshold
-    # padding).  Types already at CAL_TARGET_SAMPLES are skipped.
-    from models.calibration import _normalise_type as _nt
-    by_type_data = _CAL_WEIGHTS.get("by_type", {})
-
-    def _still_need(t):
-        return CAL_TARGET_SAMPLES - by_type_data.get(_nt(t), {}).get("samples", 0)
-
+    # Add EVERY threshold-qualifying bet as a calibration pick — no caps, and no
+    # stop once a type reaches CAL_TARGET_SAMPLES (that's a minimum for full-
+    # strength calibration, not a ceiling; recency-weighted calibration stays
+    # sharper with more/fresher data).  The tracking pool is `qualified` plus the
+    # gate-excluded bets in `cal_pool` (nrfi / batter_hits, pitcher_k_under's
+    # raised staking floor), restricted to those clearing MIN_EDGE.
     def _make_tracking(b):
         cal = dict(b)
         cal["tracking_only"] = True
@@ -176,8 +169,6 @@ def find_daily_bets(games):
     fill_pool.sort(key=lambda x: x["edge"], reverse=True)
 
     for b in fill_pool:
-        if _still_need(b.get("type", "")) <= 0:
-            continue   # type already has enough calibration data
         legs = b.get("legs") or [b["description"]]
         if cal_legs_used & set(legs):
             continue   # leg already used by a staked or earlier tracking pick
