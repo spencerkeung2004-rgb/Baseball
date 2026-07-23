@@ -26,6 +26,15 @@ def parse_bet_description(desc):
             "line":      float(kp.group(3)),
         }
 
+    hp = re.match(r'^(.+?)\s+(OVER|UNDER)\s+([\d.]+)\s+H$', desc, re.IGNORECASE)
+    if hp:
+        return {
+            "type":      "H_PROP",
+            "batter":    hp.group(1).strip(),
+            "direction": hp.group(2).upper(),
+            "line":      float(hp.group(3)),
+        }
+
     # Total runs: "OVER 7.5 Runs", "UNDER 8.0 Runs"
     tp = re.match(r'^(OVER|UNDER)\s+([\d.]+)\s+Runs?$', desc, re.IGNORECASE)
     if tp:
@@ -48,6 +57,11 @@ def parse_bet_description(desc):
 def get_pitcher_ks_from_boxscore(game_pk):
     from data.mlb_api import get_pitcher_ks_from_boxscore as _ks
     return _ks(game_pk)
+
+
+def get_batter_hits_from_boxscore(game_pk):
+    from data.mlb_api import get_batter_hits_from_boxscore as _h
+    return _h(game_pk)
 
 
 def match_pitcher_ks(pitcher_name, ks_map):
@@ -166,6 +180,22 @@ def grade_single(bet, final_games, ks_cache):
             return ("w" if first_runs == 0 else "l"), detail
         else:  # YRFI
             return ("w" if first_runs > 0 else "l"), detail
+
+    # ── Batter hits prop ──────────────────────────────────────────────────────
+    if parsed["type"] == "H_PROP":
+        hkey = ("H", matched["game_pk"])   # namespace hits within the shared cache
+        if hkey not in ks_cache:
+            ks_cache[hkey] = get_batter_hits_from_boxscore(matched["game_pk"])
+        actual, matched_name = match_pitcher_ks(parsed["batter"], ks_cache[hkey])
+        if actual is None:
+            return None, f"batter '{parsed['batter']}' not found in boxscore"
+        line      = parsed["line"]
+        direction = parsed["direction"]
+        detail    = f"{matched_name} had {actual} H  (line {direction} {line})"
+        if actual == line:
+            return "p", detail
+        hit = actual > line if direction == "OVER" else actual < line
+        return ("w" if hit else "l"), detail
 
     # ── Strikeout prop ────────────────────────────────────────────────────────
     pk = matched["game_pk"]

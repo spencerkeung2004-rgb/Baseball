@@ -94,6 +94,24 @@ def get_pitcher_ks_from_boxscore(game_pk):
     return result
 
 
+def get_batter_hits_from_boxscore(game_pk):
+    """Return {full_name: hits} for every batter who appeared in the game."""
+    data = _get(f"/game/{game_pk}/boxscore")
+    if not data:
+        return {}
+    result = {}
+    for side in ("home", "away"):
+        team_data = data.get("teams", {}).get(side, {})
+        players   = team_data.get("players", {})
+        for pid in team_data.get("batters", []):
+            player = players.get(f"ID{pid}", {})
+            name   = player.get("person", {}).get("fullName", "")
+            hits   = _i(player.get("stats", {}).get("batting", {}).get("hits", 0))
+            if name:
+                result[name] = hits
+    return result
+
+
 def get_schedule(date_str, include_started=False):
     """
     Return list of game dicts for a given date (YYYY-MM-DD).

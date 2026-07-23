@@ -1,8 +1,8 @@
 {
-  "updated_at": "2026-07-21",
-  "total_settled": 160,
-  "overall_bias": 0.8171,
-  "overall_brier": 0.2616,
+  "updated_at": "2026-07-22",
+  "total_settled": 172,
+  "overall_bias": 0.8461,
+  "overall_brier": 0.2597,
   "by_type": {
     "moneyline": {
       "bias": 0.8976,
@@ -12,8 +12,8 @@
       "brier_score": 0.2544,
       "method": "platt",
       "platt": {
-        "a": 0.9213,
-        "b": -0.2445
+        "a": 0.9215,
+        "b": -0.2427
       },
       "brier_post_cal": 0.2426,
       "active": true
@@ -28,17 +28,17 @@
       "active": false
     },
     "pitcher_k_over": {
-      "bias": 0.9617,
-      "samples": 42,
-      "weighted_predicted": 0.6648,
-      "weighted_actual": 0.6147,
-      "brier_score": 0.2659,
+      "bias": 0.9568,
+      "samples": 44,
+      "weighted_predicted": 0.6573,
+      "weighted_actual": 0.6023,
+      "brier_score": 0.2559,
       "method": "platt",
       "platt": {
-        "a": 0.6768,
-        "b": -0.0044
+        "a": 0.7389,
+        "b": -0.0409
       },
-      "brier_post_cal": 0.2553,
+      "brier_post_cal": 0.2497,
       "active": true
     },
     "parlay": {
@@ -69,11 +69,11 @@
       "active": false
     },
     "nrfi": {
-      "bias": 0.9846,
-      "samples": 10,
-      "weighted_predicted": 0.5328,
-      "weighted_actual": 0.5,
-      "brier_score": 0.2669,
+      "bias": 1.0062,
+      "samples": 20,
+      "weighted_predicted": 0.5629,
+      "weighted_actual": 0.5722,
+      "brier_score": 0.2654,
       "method": "bias",
       "active": false
     }

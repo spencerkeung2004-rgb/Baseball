@@ -228,19 +228,23 @@ def get_nrfi_odds(event_id):
 
 # ── Player props ──────────────────────────────────────────────────────────────
 
-def get_player_props(event_id, markets=None):
+def get_player_props(event_id, markets=None, bookmaker=None):
     """
-    Fetch FanDuel player prop odds for a game.
+    Fetch player prop odds for a game from `bookmaker` (default FanDuel).
     Returns dict: {market_key: {player_name: {over: {line, odds}, under: {line, odds}}}}
+
+    Note: FanDuel's Odds API feed only carries pitcher_strikeouts among player
+    props; batter props must be sourced from another book (e.g. DraftKings).
     """
     if not ODDS_API_KEY or not event_id:
         return {}
 
+    bookmaker = bookmaker or BOOKMAKER
     markets = markets or ["pitcher_strikeouts", "batter_hits", "batter_total_bases"]
     data = _get(f"/sports/{SPORT}/events/{event_id}/odds", params={
         "regions": REGION,
         "markets": ",".join(markets),
-        "bookmakers": BOOKMAKER,
+        "bookmakers": bookmaker,
         "oddsFormat": "american",
     })
     if not data:
@@ -248,7 +252,7 @@ def get_player_props(event_id, markets=None):
 
     props = {}
     for bk in data.get("bookmakers", []):
-        if bk["key"] != BOOKMAKER:
+        if bk["key"] != bookmaker:
             continue
         for market in bk.get("markets", []):
             key = market["key"]

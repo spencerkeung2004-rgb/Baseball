@@ -7,7 +7,7 @@ and returns the top DAILY_PICKS bets (single-leg or parlay).
 import itertools
 from config import (
     MIN_ODDS_AMERICAN, MIN_EDGE, MAX_UNITS, MIN_UNITS, UNIT_SIZE,
-    STARTING_BANKROLL, KELLY_FRACTION,
+    STARTING_BANKROLL, KELLY_FRACTION, BATTER_PROPS_BOOKMAKER,
     DAILY_PICKS, CALIBRATION_PICKS,
     DAILY_CAL_TRACKING_MIN, DAILY_CAL_TRACKING_MAX, CAL_TARGET_SAMPLES,
 )
@@ -44,17 +44,24 @@ def find_daily_bets(games):
         single_leg.extend(_nrfi_bets(proj, fd))
 
         if fd and fd.get("event_id"):
-            props = get_player_props(
+            # Strikeouts from FanDuel; batter props from DraftKings (FanDuel's
+            # batter-prop lines aren't exposed through the Odds API).
+            props = get_player_props(fd["event_id"], markets=["pitcher_strikeouts"])
+            props.update(get_player_props(
                 fd["event_id"],
-                markets=["pitcher_strikeouts", "batter_hits", "batter_total_bases"],
-            )
+                markets=["batter_hits", "batter_total_bases"],
+                bookmaker=BATTER_PROPS_BOOKMAKER,
+            ))
             single_leg.extend(_pitcher_k_bets(proj, props))
             single_leg.extend(_batter_hits_bets(proj, props))
             single_leg.extend(_batter_tb_bets(proj, props))
 
     # Bet types that must have CAL_TARGET_SAMPLES calibration data before
     # they are eligible for staked picks.  Until then they are tracking-only.
-    _REQUIRE_CAL = {"nrfi_nrfi", "nrfi_yrfi"}
+    # batter_hits is newly live (FanDuel never exposed the market, so it has 0
+    # settled bets and no calibration) and its raw projections are badly skewed
+    # to UNDER — gate it until it proves out with real outcome data.
+    _REQUIRE_CAL = {"nrfi_nrfi", "nrfi_yrfi", "batter_hits"}
     _by_type_cal = _CAL_WEIGHTS.get("by_type", {})
     from models.calibration import _normalise_type as _nt_pre
 
@@ -623,6 +630,7 @@ def _batter_hits_bets(proj, props):
                 "implied_prob":  round(implied, 4),
                 "edge":          round(edge, 4),
                 "reasoning": (
+                    f"[{BATTER_PROPS_BOOKMAKER}] "
                     f"Proj {proj_hits:.2f} H | season {season_avg:.3f}"
                     + xba_note
                     + (f" / {form_note}" if form_note else "")

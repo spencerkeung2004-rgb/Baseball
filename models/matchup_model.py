@@ -10,6 +10,19 @@ LEAGUE_AVG_ERA  = 4.20
 FIRST_INN_MULT  = 1.15   # top of lineup bats in 1st; historically ~15% more runs/inning
 MIN_BVP_PA      = 8      # minimum PA to apply BvP adjustment
 MAX_BVP_WEIGHT  = 0.40   # cap BvP influence at 40% (at 30+ PA)
+# Single-inning run overdispersion. Innings are mostly scoreless with occasional
+# crooked numbers, so P(0 runs) is much higher than Poisson implies. Modelling the
+# inning as negative-binomial (variance = (1+d)·mean) lifts the scoreless prob to
+# match reality (~50% NRFI base rate vs the ~30% the old Poisson model produced).
+FIRST_INN_DISPERSION = 1.5
+
+
+def _inning_scoreless_prob(mu):
+    """P(0 runs in an inning) under a negative-binomial with dispersion FIRST_INN_DISPERSION."""
+    mu = max(0.05, mu)
+    r = mu / FIRST_INN_DISPERSION
+    p = r / (r + mu)          # = 1 / (1 + FIRST_INN_DISPERSION)
+    return p ** r
 
 # Platoon K-rate modifiers: (bat_side, pitch_hand) → batter K% relative change
 # Same hand = platoon disadvantage for batter → slightly higher K rate
@@ -101,7 +114,9 @@ def project_nrfi(home_runs, away_runs, nrfi_home, nrfi_away,
                   home_sp_k9=None, away_sp_k9=None):
     """
     P(NRFI) = P(away scores 0 in top 1st) x P(home scores 0 in bottom 1st).
-    Uses Poisson with expected 1st-inning runs per side.
+    Uses a negative-binomial (overdispersed) model of expected 1st-inning runs
+    per side — Poisson understated scoreless innings and made the model predict
+    ~30% NRFI vs a ~50% real base rate.
 
     home_sp_k9 : blended K/9 of the home starting pitcher (faces away batters).
                  Higher → more away strikeouts → fewer away first-inning runs.
@@ -119,8 +134,8 @@ def project_nrfi(home_runs, away_runs, nrfi_home, nrfi_away,
     away_1st = (away_runs / 9) * FIRST_INN_MULT * nrfi_away * park_factor * weather_factor * k9_h
     home_1st = (home_runs / 9) * FIRST_INN_MULT * nrfi_home * park_factor * weather_factor * k9_a
 
-    p_away_0 = poisson.pmf(0, max(0.05, away_1st))
-    p_home_0 = poisson.pmf(0, max(0.05, home_1st))
+    p_away_0 = _inning_scoreless_prob(away_1st)
+    p_home_0 = _inning_scoreless_prob(home_1st)
     return max(0.10, min(0.90, p_away_0 * p_home_0))
 
 

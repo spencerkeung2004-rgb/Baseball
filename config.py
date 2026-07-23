@@ -12,6 +12,12 @@ if _env.exists():
 # API Keys
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 
+# Bookmakers. Game lines + pitcher strikeouts come from FanDuel, but FanDuel's
+# batter-prop lines are not exposed through the Odds API — only DraftKings/BetMGM/
+# BetRivers carry batter_hits etc.  Source batter props from DraftKings (fullest
+# coverage), which is where those specific prop bets should be placed.
+BATTER_PROPS_BOOKMAKER = "draftkings"
+
 # Bankroll Settings
 STARTING_BANKROLL = 1000.0
 UNIT_SIZE = 25.0
