@@ -368,6 +368,7 @@ def _pitcher_k_bets(proj, props):
                 raw_prob = prob_fn(line)
                 our_prob = calibrated_prob(raw_prob, f"pitcher_k_{direction}", _CAL_WEIGHTS)
                 implied  = fair_implied
+                our_prob = _anchor_to_market(our_prob, implied)   # cap implausible prop edges
                 edge     = our_prob - implied
                 bets.append({
                     "type":         f"pitcher_k_{direction}",
@@ -574,6 +575,7 @@ def _batter_hits_bets(proj, props):
             our_prob = max(0.05, min(0.95, our_prob))
             our_prob = calibrated_prob(our_prob, "batter_hits", _CAL_WEIGHTS)
             implied  = american_to_implied_prob(odds)
+            our_prob = _anchor_to_market(our_prob, implied)   # cap implausible prop edges
             edge     = our_prob - implied
 
             bets.append({
@@ -836,6 +838,24 @@ def _get_bias(bet_type, cal_weights):
             return by_type[norm].get("bias", 1.0)
     # Fallback: overall bias (conservative — model is generally overconfident)
     return cal_weights.get("overall_bias", 1.0)
+
+
+# ── Market anchoring ──────────────────────────────────────────────────────────
+
+def _anchor_to_market(our_prob, market_prob, gap_scale=0.40, cap=0.60):
+    """
+    Pull a prop probability toward the market's implied probability when the gap
+    is large — the same efficient-market anchor moneyline and totals already use.
+
+    Player-prop lines are efficiently priced, so a big model/market disagreement
+    almost always means the model over-projected that specific line (and the
+    optimizer then *selects* those over-projections because they look like the
+    biggest edges), not a genuine 20%+ edge.  Anchoring caps those: at the 0.60
+    cap the model keeps only 40% of its disagreement with the market.
+    """
+    gap = abs(our_prob - market_prob)
+    wt = min(cap, gap / gap_scale)
+    return our_prob * (1 - wt) + market_prob * wt
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
