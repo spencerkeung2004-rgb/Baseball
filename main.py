@@ -209,14 +209,16 @@ def _maybe_recalibrate():
     current.  Only prints a one-liner; full report available via `calibrate`.
     """
     from bankroll.tracker import get_settled_bets_for_calibration
-    from models.calibration import run_calibration, MIN_SAMPLES
+    from models.calibration import run_calibration
     bets = get_settled_bets_for_calibration()
-    if len(bets) < MIN_SAMPLES:
+    if not bets:
         return
+    # Always recompute so per-type calibration engages at its own threshold
+    # (Platt warms up per bet type, not on a total-across-types count).
     weights = run_calibration(bets)
-    active  = sum(1 for d in weights.get("by_type", {}).values() if d.get("active"))
-    print(f"  [Calibration] Updated — {len(bets)} settled bets, "
-          f"{active} type(s) actively correcting.  "
+    platt = sum(1 for d in weights.get("by_type", {}).values() if d.get("method") == "platt")
+    print(f"  [Calibration] Updated — {len(bets)} settled bets since epoch, "
+          f"{platt} type(s) calibrating.  "
           f"Run  python main.py calibrate  for full report.\n")
 
 
