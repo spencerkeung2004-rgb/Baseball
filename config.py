@@ -93,6 +93,12 @@ SP_K_PROJ_FACTOR = 1.12
 # moneyline win prob) is preserved while the totals over-lean is removed.
 RUN_PROJ_FACTOR = 0.92
 
+# Recent-form (momentum) also applied to run PREVENTION, not just offense: a cold
+# team concedes more, a hot team fewer.  Scaled relative to the offensive effect
+# (form correlates across sides but not perfectly).  Keep modest — baseball
+# momentum is a weak, regression-prone signal.
+DEF_MOMENTUM_SHARE = 0.50
+
 # Weather Adjustments
 TEMP_FACTOR_PER_10F = 0.015
 WIND_OUT_FACTOR_PER_10MPH = 0.05

@@ -14,7 +14,7 @@ from config import (
     DEFENSE_ERROR_WEIGHT, DEFENSE_DP_WEIGHT,
     RECENT_GAMES_WINDOW, BLEND_SEASON_RATE, BLEND_SEASON_IP,
     BLEND_SEASON_HOME_AWAY, FIP_BLEND_ERA_WEIGHT, SP_K_PROJ_FACTOR, RUN_PROJ_FACTOR,
-    LEAGUE_WOBA, WOBA_SCALE,
+    LEAGUE_WOBA, WOBA_SCALE, DEF_MOMENTUM_SHARE,
     PARK_FACTORS, DOME_STADIUMS,
 )
 from data import mlb_api, weather_api
@@ -120,9 +120,14 @@ def project_game(game):
         defense=home_def_f, is_home=False,
     )
 
-    # Apply matchup (platoon + BvP), momentum, and H2H factors
-    home_runs = home_runs_base * matchup["home_factor"] * home_mom_f * home_h2h_f
-    away_runs = away_runs_base * matchup["away_factor"] * away_mom_f * away_h2h_f
+    # Apply matchup (platoon + BvP), momentum, and H2H factors.  Momentum acts on
+    # BOTH sides: a team's own form scales its offense (home_mom_f) and, via
+    # _def_momentum, the OPPONENT's form scales its run prevention — so a cold
+    # opponent lets this team score more, a hot opponent suppresses it.
+    home_runs = (home_runs_base * matchup["home_factor"] * home_mom_f * home_h2h_f
+                 * _def_momentum(away_mom_f))
+    away_runs = (away_runs_base * matchup["away_factor"] * away_mom_f * away_h2h_f
+                 * _def_momentum(home_mom_f))
 
     # Empirical de-bias: run projections ran ~0.36/team hot.  Scaling both sides
     # equally fixes the totals over-lean while preserving the run difference (so
@@ -420,10 +425,13 @@ def _project_pitcher_peripherals(
 
 def _momentum_factor(momentum):
     """
-    Recent-form multiplier on projected runs. Max ±10%.
+    Recent-form multiplier on a team's projected OFFENSE. Max ±10%.
       - Win% component:       above/below .500 over last 10 games
       - Run-differential:     average run margin per game
-      - Hot/cold streak:      bonus/penalty for streaks of 4+
+      - Hot/cold streak:      bonus/penalty scaling with streak length (4+)
+
+    (A team's form is also applied to its run PREVENTION separately, via
+    _def_momentum, so a slumping team both scores less and concedes more.)
     """
     if not momentum:
         return 1.0
@@ -437,9 +445,21 @@ def _momentum_factor(momentum):
     rd_component  = rd_per_game * 0.008              # ±~2.5% at ±3 RD/game
     streak_bonus  = 0.0
     if streak >= 4:
-        streak_bonus = 0.015 * (1 if streak_type == "W" else -1)
+        # Scale with length: 1.5% at 4 games up to a 4% cap at 9+ games, so an
+        # extreme streak (e.g. 0-10) bites harder than a routine 4-game skid.
+        mag = min(0.04, 0.015 + (streak - 4) * 0.005)
+        streak_bonus = mag * (1 if streak_type == "W" else -1)
 
     return max(0.90, min(1.10, 1.0 + win_component + rd_component + streak_bonus))
+
+
+def _def_momentum(defender_mom_f):
+    """
+    A team's recent form applied to run PREVENTION.  Returns the multiplier on the
+    OPPONENT's runs: a cold defender (mom_f < 1) concedes more, a hot one fewer,
+    scaled by DEF_MOMENTUM_SHARE relative to the offensive effect.
+    """
+    return 1.0 + (1.0 - defender_mom_f) * DEF_MOMENTUM_SHARE
 
 
 def _h2h_factor(h2h):
