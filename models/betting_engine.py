@@ -397,6 +397,7 @@ _WALK_RATE      = 0.085   # league-avg walk rate (PA → AB conversion)
 _LEAGUE_AVG     = 0.250   # fallback batting average
 _MIN_BVP_PA     = 8       # minimum career PA before BvP is blended in
 _MAX_BVP_WEIGHT = 0.35    # cap BvP influence (reached at ~40 PA)
+_MIN_BATTER_PA  = 30      # min season PA before a batter's hit projection is trusted
 
 
 def _batter_hits_bets(proj, props):
@@ -418,7 +419,7 @@ def _batter_hits_bets(proj, props):
     Poisson P(hits ≥ line+1) / P(hits ≤ line) vs FanDuel implied prob.
     Requires posted lineups; returns [] silently when pending.
     """
-    from scipy.stats import poisson as _poi
+    from scipy.stats import binom
     from config import BLEND_SEASON_RATE, BLEND_SEASON_HOME_AWAY, XBA_WEIGHT
     from data.mlb_api import (
         get_player_season_stats, get_batter_recent_stats, get_player_info,
@@ -508,6 +509,8 @@ def _batter_hits_bets(proj, props):
 
         # Layer 1 — season avg blended with recent form (last 15 games)
         batter_stats = get_player_season_stats(batter_id)
+        if batter_stats.get("pa", 0) < _MIN_BATTER_PA:
+            continue   # too few PA (e.g. fresh call-up) — projection unreliable
         season_avg   = batter_stats.get("avg", _LEAGUE_AVG)
 
         # Layer 1a — Statcast xBA: blend expected BA (quality of contact, more
@@ -567,10 +570,15 @@ def _batter_hits_bets(proj, props):
                 continue
 
             k = int(line)   # floor: 0.5→0, 1.5→1
+            # Hits ~ Binomial(AB, avg): a fixed number of at-bats, each a
+            # Bernoulli trial.  This is tighter (under-dispersed) than Poisson,
+            # which over-stated P(0 hits) and inflated every UNDER.
+            n_ab  = max(1, round(exp_ab))
+            p_hit = min(0.95, max(0.02, adj_avg))
             if direction == "over":
-                our_prob = float(1.0 - _poi.cdf(k, proj_hits))
+                our_prob = float(1.0 - binom.cdf(k, n_ab, p_hit))
             else:
-                our_prob = float(_poi.cdf(k, proj_hits))
+                our_prob = float(binom.cdf(k, n_ab, p_hit))
 
             our_prob = max(0.05, min(0.95, our_prob))
             our_prob = calibrated_prob(our_prob, "batter_hits", _CAL_WEIGHTS)
