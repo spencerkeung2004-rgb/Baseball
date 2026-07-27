@@ -25,13 +25,16 @@ _CAL_WEIGHTS = load_cal_weights()
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def find_daily_bets(games):
+def find_daily_bets(games, include_started=False):
     """
     Given today's list of game dicts (from mlb_api.get_schedule),
     return up to DAILY_PICKS bet dicts sorted by edge descending.
     Parlays from different games compete directly with single-leg picks.
+
+    include_started=True keeps games that already commenced (used to record a full
+    slate as calibration tracking after first pitch).
     """
-    fd_games = get_mlb_odds()
+    fd_games = get_mlb_odds(include_started=include_started)
     single_leg = []
 
     for game in games:

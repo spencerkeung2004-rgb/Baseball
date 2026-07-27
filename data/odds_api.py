@@ -106,8 +106,13 @@ def get_requests_remaining():
 
 # ── Game-level odds ───────────────────────────────────────────────────────────
 
-def get_mlb_odds():
-    """Fetch FanDuel moneyline + totals for all today's games."""
+def get_mlb_odds(include_started=False):
+    """
+    Fetch FanDuel moneyline + totals for all today's games.
+    By default drops games that commenced >3h ago; pass include_started=True to
+    keep them (e.g. to record a full slate as calibration tracking after games
+    have begun).
+    """
     import datetime as _dt
     if not ODDS_API_KEY:
         print("  [Odds API] No ODDS_API_KEY set — skipping odds fetch.")
@@ -129,7 +134,7 @@ def get_mlb_odds():
     games = []
     for event in data:
         ct = event.get("commence_time", "")
-        if ct:
+        if ct and not include_started:
             try:
                 ct_dt = _dt.datetime.fromisoformat(ct.replace("Z", "+00:00"))
                 if ct_dt < _cutoff:
