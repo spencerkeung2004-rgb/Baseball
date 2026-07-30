@@ -1,7 +1,7 @@
 """SQLite-backed bankroll tracker."""
 import json
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from config import STARTING_BANKROLL, CALIBRATION_EPOCH
@@ -242,6 +242,12 @@ def save_picks(picks, date_str=None):
         "DELETE FROM bets WHERE date = ? AND result IN ('pending','tracking')",
         (date_str,),
     )
+    # One explicit timestamp for the whole save so every bet shares a created_at.
+    # Relying on the per-row CURRENT_TIMESTAMP default splits a multi-row save
+    # across a 1-second boundary, and settle --auto's latest-batch filter
+    # (MAX(created_at)) then silently strands the earlier-stamped bets.
+    # UTC 'YYYY-MM-DD HH:MM:SS' matches SQLite's CURRENT_TIMESTAMP format.
+    batch_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     staked_ids   = []
     tracking_ids = []
     for p in picks:
@@ -250,14 +256,16 @@ def save_picks(picks, date_str=None):
         c = conn.execute(
             """INSERT INTO bets
                (date, type, description, game, american_odds, units, stake,
-                potential_win, result, bankroll_before, legs, reasoning, our_prob, edge)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                potential_win, result, bankroll_before, legs, reasoning, our_prob, edge,
+                created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 date_str, p["type"], p["description"], p.get("game", ""),
                 p["american_odds"], p["units"], p["stake"], p["potential_win"],
                 result, bankroll,
                 json.dumps(p["legs"]) if p.get("legs") else None,
                 p.get("reasoning", ""), p.get("our_prob", 0), p.get("edge", 0),
+                batch_ts,
             ),
         )
         if is_tracking:
