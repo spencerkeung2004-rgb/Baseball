@@ -14,6 +14,8 @@ from config import (
     DEFENSE_ERROR_WEIGHT, DEFENSE_DP_WEIGHT,
     RECENT_GAMES_WINDOW, BLEND_SEASON_RATE, BLEND_SEASON_IP,
     BLEND_SEASON_HOME_AWAY, FIP_BLEND_ERA_WEIGHT, SP_K_PROJ_FACTOR, RUN_PROJ_FACTOR,
+    SP_SKILL_REGRESSION_IP, ERA_FACTOR_MIN, ERA_FACTOR_MAX, K_VAR_MULT,
+    K_ANCHOR_SCALE, K_ANCHOR_CAP,
     LEAGUE_WOBA, WOBA_SCALE, DEF_MOMENTUM_SHARE,
     PARK_FACTORS, DOME_STADIUMS,
 )
@@ -244,6 +246,13 @@ def _project_runs(batting, opp_sp, opp_sp_recent, opp_team_pit,
     sp_era_rec   = opp_sp_recent.get("recent_era", sp_skill)
     sp_era_blend = sp_skill * BLEND_SEASON_RATE + sp_era_rec * (1 - BLEND_SEASON_RATE)
 
+    # Regress the starter's estimate toward league average by sample size.  A
+    # low-IP line (injury return, call-up) is mostly noise — e.g. Scherzer's 9.49
+    # ERA over 24 IP would otherwise blow the opposing offense up ~1.6×.
+    sp_ip_sample = opp_sp.get("innings_pitched", 0.0)
+    reg_w        = sp_ip_sample / (sp_ip_sample + SP_SKILL_REGRESSION_IP)
+    sp_era_blend = sp_era_blend * reg_w + LEAGUE_AVG_ERA * (1 - reg_w)
+
     sp_ip = min(max(opp_sp.get("ip_per_start", 5.5), 4.0), 7.0)
     sp_w  = sp_ip / 9.0
     bp_w  = 1.0 - sp_w
@@ -251,6 +260,8 @@ def _project_runs(batting, opp_sp, opp_sp_recent, opp_team_pit,
 
     combined_era = sp_era_blend * sp_w + bp_era * bp_w
     era_factor   = combined_era / LEAGUE_AVG_ERA
+    # Backstop: no single matchup should swing an offense more than ±35%.
+    era_factor   = max(ERA_FACTOR_MIN, min(ERA_FACTOR_MAX, era_factor))
 
     runs = base * era_factor * defense * park * weather
     if is_home:
@@ -564,13 +575,47 @@ def total_under_prob(proj_total, line):
     return max(0.05, min(0.95, 1 - total_over_prob(proj_total, line)))
 
 
+def _nb_params_k(mu):
+    """
+    Negative-binomial params for a strikeout mean (mu), overdispersed so that
+    Var = K_VAR_MULT·mu (vs Poisson's Var = mu).
+
+    Var = mu(1 + mu/r) = K_VAR_MULT·mu  →  r = mu / (K_VAR_MULT − 1).
+    Reduces to Poisson as K_VAR_MULT → 1.  Same nbinom(r, p) parameterisation as
+    _nb_params: mean = r(1−p)/p, so p = r/(r+mu).
+    """
+    r = mu / (K_VAR_MULT - 1.0)
+    p = r / (r + mu)
+    return r, p
+
+
+def _anchored_k_proj(proj_ks, line):
+    """
+    Shrink a strikeout projection toward the market line when they disagree — the
+    K-prop analogue of _anchored_proj for totals.
+
+    The K projection is unbiased but noisy (~2.3 K/start), so a large gap to the
+    (sharp) book line is mostly that noise, not real edge — and the optimizer
+    selects exactly those inflated gaps.  Lean on the line proportionally to the gap:
+      gap 0            → pure model
+      gap K_ANCHOR_SCALE→ K_ANCHOR_CAP weight on the line (capped)
+    """
+    gap = abs(proj_ks - line)
+    market_wt = min(K_ANCHOR_CAP, gap / K_ANCHOR_SCALE)
+    return proj_ks * (1 - market_wt) + line * market_wt
+
+
 def ks_over_prob(proj_ks, line):
+    """P(strikeouts > line) using market-anchored projection + overdispersed NB."""
     if proj_ks <= 0:
         return 0.50
-    prob = 1 - poisson.cdf(int(line), proj_ks)
+    mu = _anchored_k_proj(proj_ks, line)
+    r, p = _nb_params_k(mu)
+    prob = 1 - nbinom.cdf(int(line), r, p)
     if line != int(line):
         return max(0.05, min(0.95, prob))
-    return max(0.05, min(0.95, prob - poisson.pmf(int(line), proj_ks) * 0.5))
+    # Integer line: split the push at exactly the line evenly (totals convention)
+    return max(0.05, min(0.95, prob + nbinom.pmf(int(line), r, p) * 0.5))
 
 
 def ks_under_prob(proj_ks, line):

@@ -81,11 +81,44 @@ BLEND_SEASON_HOME_AWAY = 0.60  # season weight vs. home/away split (~half-season
 # (skill-based, defense-independent).  ERA kept at 40% per requirement.
 FIP_BLEND_ERA_WEIGHT = 0.40   # ERA weight; FIP gets the remaining 0.60
 
+# Starter run-prevention estimate is regressed toward league average by sample
+# size:  true ≈ observed·IP/(IP+K) + league·K/(IP+K),  K = SP_SKILL_REGRESSION_IP.
+# Without this, a tiny-sample ERA (injury return, September call-up) is read at
+# face value — e.g. a 24-IP, 9.49-ERA line inflated the opposing offense ~1.6×.
+# ~70 IP is roughly where a starter's ERA/FIP half-stabilizes.
+SP_SKILL_REGRESSION_IP = 70
+# Backstop clamp on the opposing-pitching run multiplier (combined_era / lg ERA)
+# so no single pitcher/bullpen line can swing a team's projected offense more than
+# ±35% before park/weather.  Bites only on extreme small-sample or data-glitch lines.
+ERA_FACTOR_MIN = 0.75
+ERA_FACTOR_MAX = 1.35
+
 # SP strikeout projection ran ~0.6 Ks low across 1,600+ historical starts (a bias
 # that also drove the pitcher_k_under miscalibration — projecting Ks low makes
 # UNDERs look strong and OVERs weak).  Empirical multiplicative correction to
 # remove that measured bias; re-tune if the SP-K projection bias shifts.
 SP_K_PROJ_FACTOR = 1.12
+
+# Strikeout-prop distribution width.  The K PROJECTION is unbiased in the mean
+# (measured −0.13 K over 146 starts, no tail bias), but actual Ks scatter ~20%
+# wider than Poisson around it — Var(actual | projection) ≈ 1.20×mean — because the
+# projection carries its own estimation error on top of Poisson game noise.  Plain
+# Poisson understated this, so P(over) was overconfident whenever the projection sat
+# above the line, inflating exactly the over-edges the optimizer selects (that, plus
+# selection vs a sharp market, is why pitcher_k_over ran 12-19 despite an unbiased
+# projection).  Model K props with a mildly overdispersed negative binomial instead,
+# same family the totals model already uses.  Var = mu(1 + mu/r) = K_VAR_MULT·mu.
+K_VAR_MULT = 1.20
+
+# Market anchoring for K props — the K-prop analogue of the totals _anchored_proj.
+# The K projection is unbiased but noisy (~2.3 K/start); a large model-vs-line gap
+# is almost all that noise, and the optimizer selects those inflated gaps as "edges."
+# Even after calibration + the probability-level anchor, pitcher_k_over's staking
+# prob still ran +20pt overconfident (56% predicted vs 36% actual).  Shrink the
+# projection toward the (sharp) book line before pricing, proportional to the gap:
+#   gap 0 -> pure model;  gap = K_ANCHOR_SCALE -> full weight, then capped.
+K_ANCHOR_SCALE = 3.5   # K of model-vs-line gap at which market weight hits the cap
+K_ANCHOR_CAP   = 0.65  # max weight placed on the market line
 
 # Team run projection ran ~0.36/team (~0.72/game) hot across 800+ historical games
 # — the LEAGUE_AVG_RUNS anchor and the stacked multiplicative factors compound a
