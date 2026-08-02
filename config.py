@@ -138,8 +138,15 @@ WIND_OUT_FACTOR_PER_10MPH = 0.05
 WIND_IN_FACTOR_PER_10MPH = 0.04
 
 # Park Factors
+# NOTE: "ATH" is the relocated Athletics at Sutter Health Park (Sacramento) — a
+# tiny, hot minor-league park that plays as the most extreme hitters' park in MLB.
+# 2026 A's games: 12.14 total runs/game at home vs 7.95 on the road → raw factor
+# 1.53 (higher than Coors!).  Regressed toward 1.0 for single-season noise and set
+# to 1.35 (Coors-level).  Was MISSING before, defaulting to a neutral 1.00, which
+# systematically under-projected ATH totals and manufactured false UNDER edges.
+# "OAK" (0.94) is retained for pre-2025 Oakland Coliseum games in the backtest.
 PARK_FACTORS = {
-    "COL": 1.35, "CIN": 1.12, "TEX": 1.08, "BAL": 1.06, "PHI": 1.05,
+    "COL": 1.35, "ATH": 1.35, "CIN": 1.12, "TEX": 1.08, "BAL": 1.06, "PHI": 1.05,
     "NYY": 1.04, "BOS": 1.03, "MIL": 1.02, "HOU": 1.01, "CHC": 1.00,
     "STL": 0.99, "ATL": 0.99, "LAD": 0.98, "NYM": 0.98, "TOR": 0.98,
     "MIN": 0.97, "ARI": 0.97, "DET": 0.97, "CLE": 0.96, "CWS": 0.96,
