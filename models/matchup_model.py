@@ -58,6 +58,27 @@ _PLATOON = {
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
+def _top_of_order_factor(batter_ids, top_n=4):
+    """
+    How much stronger the top of the order is than the whole lineup, by OPS.
+
+    The 1st inning is faced almost entirely by batters 1-4, so first-inning scoring
+    should lean on their quality rather than the team-average runs/9 base.  Returns
+    (avg OPS of the top `top_n` batters) / (avg OPS of the full lineup), bounded to
+    [0.90, 1.30] — a top of order that's stronger than the lineup scales 1st-inning
+    runs up; a flat lineup leaves it ~1.0.
+    """
+    ids = batter_ids[:9]
+    if len(ids) < top_n:
+        return 1.0
+    ops = [(mlb_api.get_player_season_stats(bid) or {}).get("ops") or 0.720 for bid in ids]
+    top   = sum(ops[:top_n]) / top_n
+    whole = sum(ops) / len(ops)
+    if whole <= 0:
+        return 1.0
+    return round(max(0.90, min(1.30, top / whole)), 4)
+
+
 def get_matchup_data(game):
     """
     Fetch lineup, platoon splits, and BvP for a game.
@@ -88,11 +109,14 @@ def get_matchup_data(game):
     home_factor = _lineup_factor(home_ids, away_sp_id, away_hand,
                                   away_sp_season, away_platoon, top_n=9)
 
-    # NRFI: only top-3 batters are near-guaranteed to face the SP in the 1st
+    # NRFI: only top-3 batters are near-guaranteed to face the SP in the 1st.
+    # Weight the top of the order's raw offensive quality (OPS) too — the 1st inning
+    # is faced almost entirely by batters 1-4, who are stronger than the team average
+    # the runs/9 base assumes, so first-inning scoring should lean on them.
     nrfi_away = _lineup_factor(away_ids, home_sp_id, home_hand,
-                                home_sp_season, home_platoon, top_n=3)
+                                home_sp_season, home_platoon, top_n=3) * _top_of_order_factor(away_ids)
     nrfi_home = _lineup_factor(home_ids, away_sp_id, away_hand,
-                                away_sp_season, away_platoon, top_n=3)
+                                away_sp_season, away_platoon, top_n=3) * _top_of_order_factor(home_ids)
 
     return {
         "has_lineup":     True,
@@ -110,7 +134,6 @@ def get_matchup_data(game):
 LEAGUE_K9_SP = 8.7   # kept in sync with config.py
 
 def project_nrfi(home_runs, away_runs, nrfi_home, nrfi_away,
-                  park_factor, weather_factor,
                   home_sp_k9=None, away_sp_k9=None):
     """
     P(NRFI) = P(away scores 0 in top 1st) x P(home scores 0 in bottom 1st).
@@ -126,13 +149,18 @@ def project_nrfi(home_runs, away_runs, nrfi_home, nrfi_away,
     Suppression factor = LEAGUE_K9_SP / sp_k9, capped to [0.80, 1.20].
     Interpretation: a 12.0 K/9 SP gives factor 8.7/12.0 ≈ 0.73 → capped at 0.80
     (20% fewer expected first-inning runs vs the ERA-only model).
+
+    NOTE: park & weather are NOT applied here — home_runs/away_runs already include
+    them (they come from _project_runs).  Re-applying them double-counted the park
+    (park² ≈ 1.82× at ATH/COL) and inflated YRFI into a spurious huge edge at
+    extreme parks.  The top-of-order lift lives inside nrfi_home/nrfi_away.
     """
     # K/9 run-suppression factors
     k9_h = max(0.80, min(1.20, LEAGUE_K9_SP / home_sp_k9)) if (home_sp_k9 and home_sp_k9 > 0) else 1.0
     k9_a = max(0.80, min(1.20, LEAGUE_K9_SP / away_sp_k9)) if (away_sp_k9 and away_sp_k9 > 0) else 1.0
 
-    away_1st = (away_runs / 9) * FIRST_INN_MULT * nrfi_away * park_factor * weather_factor * k9_h
-    home_1st = (home_runs / 9) * FIRST_INN_MULT * nrfi_home * park_factor * weather_factor * k9_a
+    away_1st = (away_runs / 9) * FIRST_INN_MULT * nrfi_away * k9_h
+    home_1st = (home_runs / 9) * FIRST_INN_MULT * nrfi_home * k9_a
 
     p_away_0 = _inning_scoreless_prob(away_1st)
     p_home_0 = _inning_scoreless_prob(home_1st)

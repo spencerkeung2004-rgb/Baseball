@@ -151,7 +151,6 @@ def project_game(game):
     nrfi_prob = matchup_model.project_nrfi(
         home_runs, away_runs,
         matchup["nrfi_home"], matchup["nrfi_away"],
-        park_factor, w_factor,
         home_sp_k9=_blend_k9(home_sp, home_sp_r),
         away_sp_k9=_blend_k9(away_sp, away_sp_r),
     )
