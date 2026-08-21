@@ -16,10 +16,12 @@ from config import (
     BLEND_SEASON_HOME_AWAY, FIP_BLEND_ERA_WEIGHT, SP_K_PROJ_FACTOR, RUN_PROJ_FACTOR,
     SP_SKILL_REGRESSION_IP, ERA_FACTOR_MIN, ERA_FACTOR_MAX, K_VAR_MULT,
     K_ANCHOR_SCALE, K_ANCHOR_CAP,
+    SP_SKILL_ERA_W, SP_SKILL_FIP_W, SP_SKILL_XERA_W,
+    XWOBA_FACTOR_MIN, XWOBA_FACTOR_MAX,
     LEAGUE_WOBA, WOBA_SCALE, DEF_MOMENTUM_SHARE,
     PARK_FACTORS, DOME_STADIUMS,
 )
-from data import mlb_api, weather_api
+from data import mlb_api, weather_api, savant_api
 from models import matchup_model
 from models.matchup_model import get_lineup_k_bb_factors
 
@@ -58,8 +60,10 @@ def project_game(game):
     home_platoon = away_platoon = {}
     home_sp_ha = away_sp_ha = {}
     home_rest = away_rest = {"days_rest": 5, "last_ip": 5.5, "est_pitch_count": 80}
+    pxstats = savant_api.get_pitcher_xstats()   # {pid: {xera, ...}}, cached per season
     if game.get("home_pitcher_id"):
         home_sp      = mlb_api.get_pitcher_season_stats(game["home_pitcher_id"]) or {}
+        home_sp      = {**home_sp, "xera": pxstats.get(game["home_pitcher_id"], {}).get("xera")}
         home_sp_r    = mlb_api.get_pitcher_recent_stats(game["home_pitcher_id"], last_n=RECENT_GAMES_WINDOW) or {}
         home_platoon = mlb_api.get_pitcher_platoon_splits(game["home_pitcher_id"]) or {}
         home_rest    = mlb_api.get_pitcher_rest_days(game["home_pitcher_id"])
@@ -67,6 +71,7 @@ def project_game(game):
         home_sp_ha   = mlb_api.get_pitcher_home_away_splits(game["home_pitcher_id"]).get("home", {})
     if game.get("away_pitcher_id"):
         away_sp      = mlb_api.get_pitcher_season_stats(game["away_pitcher_id"]) or {}
+        away_sp      = {**away_sp, "xera": pxstats.get(game["away_pitcher_id"], {}).get("xera")}
         away_sp_r    = mlb_api.get_pitcher_recent_stats(game["away_pitcher_id"], last_n=RECENT_GAMES_WINDOW) or {}
         away_platoon = mlb_api.get_pitcher_platoon_splits(game["away_pitcher_id"]) or {}
         away_rest    = mlb_api.get_pitcher_rest_days(game["away_pitcher_id"])
@@ -130,6 +135,10 @@ def project_game(game):
                  * _def_momentum(away_mom_f))
     away_runs = (away_runs_base * matchup["away_factor"] * away_mom_f * away_h2h_f
                  * _def_momentum(home_mom_f))
+
+    # Statcast: nudge each offense toward its lineup's expected wOBA (contact quality)
+    home_runs *= _lineup_xwoba_factor(home_lineup)
+    away_runs *= _lineup_xwoba_factor(away_lineup)
 
     # Empirical de-bias: run projections ran ~0.36/team hot.  Scaling both sides
     # equally fixes the totals over-lean while preserving the run difference (so
@@ -229,6 +238,30 @@ def _offense_base(batting):
     return batting.get("runs_per_game", LEAGUE_AVG_RUNS)
 
 
+def _lineup_xwoba_factor(batter_ids):
+    """
+    Nudge a team's offense toward its posted lineup's EXPECTED wOBA (Statcast quality
+    of contact).  factor = Σest_woba / Σwoba over the lineup: >1 when the lineup has
+    been unlucky (xwOBA above wOBA → should regress up), <1 when it's over-performed
+    its contact.  Bounded to stay a nudge; 1.0 (no-op) with no lineup / no Savant data.
+    """
+    if not batter_ids:
+        return 1.0
+    xs = savant_api.get_batter_xstats()
+    num = den = 0.0
+    for bid in batter_ids[:9]:
+        d = xs.get(bid)
+        if not d:
+            continue
+        w, xw = d.get("woba"), d.get("est_woba")
+        if w and xw and w > 0:
+            num += xw
+            den += w
+    if den <= 0:
+        return 1.0
+    return max(XWOBA_FACTOR_MIN, min(XWOBA_FACTOR_MAX, num / den))
+
+
 def _project_runs(batting, opp_sp, opp_sp_recent, opp_team_pit,
                   park, weather, defense, is_home):
     base = _offense_base(batting)
@@ -240,7 +273,13 @@ def _project_runs(batting, opp_sp, opp_sp_recent, opp_team_pit,
     # the pitcher's own run prevention than ERA alone.
     sp_era       = opp_sp.get("era", LEAGUE_AVG_ERA)
     sp_fip       = opp_sp.get("fip", sp_era)
-    sp_skill     = FIP_BLEND_ERA_WEIGHT * sp_era + (1 - FIP_BLEND_ERA_WEIGHT) * sp_fip
+    sp_xera      = opp_sp.get("xera")
+    # Blend in Statcast xERA (expected ERA from contact quality) when available —
+    # it's the least luck-contaminated run-prevention read.  Fall back to ERA/FIP.
+    if sp_xera and 1.0 < sp_xera < 12.0:
+        sp_skill = SP_SKILL_ERA_W * sp_era + SP_SKILL_FIP_W * sp_fip + SP_SKILL_XERA_W * sp_xera
+    else:
+        sp_skill = FIP_BLEND_ERA_WEIGHT * sp_era + (1 - FIP_BLEND_ERA_WEIGHT) * sp_fip
     # Recent game-log only carries ERA — blend it onto the FIP-based season skill.
     sp_era_rec   = opp_sp_recent.get("recent_era", sp_skill)
     sp_era_blend = sp_skill * BLEND_SEASON_RATE + sp_era_rec * (1 - BLEND_SEASON_RATE)

@@ -79,7 +79,20 @@ BLEND_SEASON_HOME_AWAY = 0.60  # season weight vs. home/away split (~half-season
 
 # Run-allowance skill estimate: blend ERA (noisy, defense-contaminated) with FIP
 # (skill-based, defense-independent).  ERA kept at 40% per requirement.
-FIP_BLEND_ERA_WEIGHT = 0.40   # ERA weight; FIP gets the remaining 0.60
+FIP_BLEND_ERA_WEIGHT = 0.40   # ERA weight; FIP gets the remaining 0.60 (fallback when
+                              # xERA is unavailable — see SP_SKILL_*_W below)
+
+# Statcast expected stats (Baseball Savant) blended in — quality of contact predicts
+# future performance better than results.  SP run-prevention skill: when the pitcher's
+# xERA is available, blend ERA/FIP/xERA (weights sum to 1.0); otherwise fall back to
+# the ERA/FIP split above.
+SP_SKILL_ERA_W  = 0.30   # actual ERA (results, defense/luck-contaminated)
+SP_SKILL_FIP_W  = 0.35   # FIP (K, BB, HR)
+SP_SKILL_XERA_W = 0.35   # xERA (Statcast expected ERA from contact quality allowed)
+# Team offense nudged toward the lineup's expected wOBA: factor = Σest_woba / Σwoba
+# over the posted lineup, bounded so it stays a regression nudge, not a rewrite.
+XWOBA_FACTOR_MIN = 0.94
+XWOBA_FACTOR_MAX = 1.06
 
 # Starter run-prevention estimate is regressed toward league average by sample
 # size:  true ≈ observed·IP/(IP+K) + league·K/(IP+K),  K = SP_SKILL_REGRESSION_IP.
