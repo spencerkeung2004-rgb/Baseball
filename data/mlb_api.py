@@ -76,6 +76,70 @@ def get_final_scores(date_str):
     return games
 
 
+_BULLPEN_IP_CACHE = {}   # (game_pk, team_id) -> bullpen IP
+
+
+def _team_bullpen_ip_from_boxscore(game_pk, team_id):
+    """
+    Relief innings a team threw in one game = total pitching IP minus the starter's
+    (the first pitcher in the appearance-ordered 'pitchers' list).  None if no data.
+    (IP is treated as a decimal, matching how the rest of the model reads it.)
+    """
+    key = (game_pk, team_id)
+    if key in _BULLPEN_IP_CACHE:
+        return _BULLPEN_IP_CACHE[key]
+    data = _get(f"/game/{game_pk}/boxscore")
+    result = None
+    for side in ("home", "away"):
+        td = data.get("teams", {}).get(side, {}) if data else {}
+        if td.get("team", {}).get("id") != team_id:
+            continue
+        players  = td.get("players", {})
+        pitchers = td.get("pitchers", [])
+        if not pitchers:
+            break
+        total_ip = starter_ip = 0.0
+        for i, pid in enumerate(pitchers):
+            ip = _f(players.get(f"ID{pid}", {}).get("stats", {}).get("pitching", {}).get("inningsPitched", 0))
+            total_ip += ip
+            if i == 0:
+                starter_ip = ip
+        result = max(0.0, total_ip - starter_ip)
+        break
+    _BULLPEN_IP_CACHE[key] = result
+    return result
+
+
+def get_team_recent_bullpen_ip(team_id, date_str, lookback_days=2):
+    """
+    Return {'bp_ip': relief innings thrown, 'games': N} by the team over the
+    `lookback_days` days BEFORE date_str — a bullpen-fatigue signal.  None if no data.
+    """
+    import datetime as _dt
+    try:
+        d = _dt.date.fromisoformat(date_str)
+    except Exception:
+        return None
+    start = (d - _dt.timedelta(days=lookback_days)).isoformat()
+    end   = (d - _dt.timedelta(days=1)).isoformat()
+    data = _get("/schedule", params={
+        "sportId": 1, "teamId": team_id, "startDate": start, "endDate": end,
+    })
+    if not data:
+        return None
+    total_bp = 0.0
+    n = 0
+    for date in data.get("dates", []):
+        for g in date.get("games", []):
+            if g.get("status", {}).get("abstractGameState") not in ("Final", "Game Over", "Completed"):
+                continue
+            bp = _team_bullpen_ip_from_boxscore(g["gamePk"], team_id)
+            if bp is not None:
+                total_bp += bp
+                n += 1
+    return {"bp_ip": total_bp, "games": n} if n else None
+
+
 def get_pitcher_ks_from_boxscore(game_pk):
     """Return {full_name: strikeouts} for every pitcher who appeared in the game."""
     data = _get(f"/game/{game_pk}/boxscore")

@@ -11,13 +11,15 @@ from config import (
     LEAGUE_AVG_RUNS, LEAGUE_AVG_ERA, LEAGUE_K_PCT, LEAGUE_BB_PCT,
     LEAGUE_K9_SP, LEAGUE_BB9_SP,
     LEAGUE_AVG_ERRORS_PER_GAME, LEAGUE_AVG_DP_PER_GAME,
-    DEFENSE_ERROR_WEIGHT, DEFENSE_DP_WEIGHT,
+    DEFENSE_ERROR_WEIGHT, DEFENSE_DP_WEIGHT, OAA_RUN_PER_OUT,
     RECENT_GAMES_WINDOW, BLEND_SEASON_RATE, BLEND_SEASON_IP,
     BLEND_SEASON_HOME_AWAY, FIP_BLEND_ERA_WEIGHT, SP_K_PROJ_FACTOR, RUN_PROJ_FACTOR,
     SP_SKILL_REGRESSION_IP, ERA_FACTOR_MIN, ERA_FACTOR_MAX, K_VAR_MULT,
     K_ANCHOR_SCALE, K_ANCHOR_CAP,
     SP_SKILL_ERA_W, SP_SKILL_FIP_W, SP_SKILL_XERA_W,
     XWOBA_FACTOR_MIN, XWOBA_FACTOR_MAX,
+    BULLPEN_LOOKBACK_DAYS, BULLPEN_EXPECTED_IP_PER_GAME, BULLPEN_FATIGUE_SCALE,
+    BULLPEN_FATIGUE_MIN, BULLPEN_FATIGUE_MAX,
     LEAGUE_WOBA, WOBA_SCALE, DEF_MOMENTUM_SHARE,
     PARK_FACTORS, DOME_STADIUMS,
 )
@@ -110,21 +112,27 @@ def project_game(game):
     home_h2h_f = _h2h_factor(h2h_home)
     away_h2h_f = _h2h_factor(h2h_away)
 
-    # Team defense — each side's own fielding-quality multiplier, applied
-    # against the OPPONENT's batting (the team on the field, not at bat)
-    home_def_f = _defense_factor(home_field)
-    away_def_f = _defense_factor(away_field)
+    # Team defense — each side's own fielding-quality multiplier, applied against the
+    # OPPONENT's batting (the team on the field, not at bat).  Prefer Statcast OAA.
+    team_oaa = savant_api.get_team_oaa()   # {team_id: OAA}, cached per season
+    home_def_f = _defense_factor(home_field, team_oaa.get(home_id), home_hit.get("games"))
+    away_def_f = _defense_factor(away_field, team_oaa.get(away_id), away_hit.get("games"))
+
+    # Bullpen fatigue from recent relief workload (each team's pen faces the opponent)
+    game_date = game.get("date")
+    home_bp_fatigue = _bullpen_fatigue_factor(home_id, game_date)
+    away_bp_fatigue = _bullpen_fatigue_factor(away_id, game_date)
 
     # Base run projections (pitcher ERA model)
     home_runs_base = _project_runs(
         batting=home_hit, opp_sp=away_sp, opp_sp_recent=away_sp_r,
         opp_team_pit=away_pit, park=park_factor, weather=w_factor,
-        defense=away_def_f, is_home=True,
+        defense=away_def_f, is_home=True, bp_fatigue=away_bp_fatigue,
     )
     away_runs_base = _project_runs(
         batting=away_hit, opp_sp=home_sp, opp_sp_recent=home_sp_r,
         opp_team_pit=home_pit, park=park_factor, weather=w_factor,
-        defense=home_def_f, is_home=False,
+        defense=home_def_f, is_home=False, bp_fatigue=home_bp_fatigue,
     )
 
     # Apply matchup (platoon + BvP), momentum, and H2H factors.  Momentum acts on
@@ -262,8 +270,24 @@ def _lineup_xwoba_factor(batter_ids):
     return max(XWOBA_FACTOR_MIN, min(XWOBA_FACTOR_MAX, num / den))
 
 
+def _bullpen_fatigue_factor(team_id, date_str):
+    """
+    Multiplier on a team's bullpen ERA from recent relief workload.  A pen that threw
+    a lot the last couple days has its best/rested arms unavailable → worse tonight
+    (>1); a pen coming off deep starts / an off day is fresher (<1).  1.0 (no-op)
+    when box-score data is unavailable.
+    """
+    if not team_id or not date_str:
+        return 1.0
+    d = mlb_api.get_team_recent_bullpen_ip(team_id, date_str, BULLPEN_LOOKBACK_DAYS)
+    if not d or not d.get("games"):
+        return 1.0
+    excess = d["bp_ip"] - d["games"] * BULLPEN_EXPECTED_IP_PER_GAME
+    return max(BULLPEN_FATIGUE_MIN, min(BULLPEN_FATIGUE_MAX, 1.0 + excess * BULLPEN_FATIGUE_SCALE))
+
+
 def _project_runs(batting, opp_sp, opp_sp_recent, opp_team_pit,
-                  park, weather, defense, is_home):
+                  park, weather, defense, is_home, bp_fatigue=1.0):
     base = _offense_base(batting)
     if not (0.5 < base < 15):
         base = LEAGUE_AVG_RUNS
@@ -294,7 +318,7 @@ def _project_runs(batting, opp_sp, opp_sp_recent, opp_team_pit,
     sp_ip = min(max(opp_sp.get("ip_per_start", 5.5), 4.0), 7.0)
     sp_w  = sp_ip / 9.0
     bp_w  = 1.0 - sp_w
-    bp_era = opp_team_pit.get("era", LEAGUE_AVG_ERA)
+    bp_era = opp_team_pit.get("era", LEAGUE_AVG_ERA) * bp_fatigue   # recent relief workload
 
     combined_era = sp_era_blend * sp_w + bp_era * bp_w
     era_factor   = combined_era / LEAGUE_AVG_ERA
@@ -309,16 +333,21 @@ def _project_runs(batting, opp_sp, opp_sp_recent, opp_team_pit,
 
 # ── Team defense ──────────────────────────────────────────────────────────────
 
-def _defense_factor(fielding):
+def _defense_factor(fielding, oaa=None, games=None):
     """
     Defensive-quality multiplier applied to the OPPONENT's expected runs
     (and, in the betting engine, batting-average-on-balls-in-play props).
 
-    Combines two MLB team fielding-stat-group signals vs league average:
-      - error rate      : more errors -> extra baserunners/unearned runs -> more runs allowed
-      - double-play rate: fewer DPs   -> fewer rally-killing outs        -> more runs allowed
-    Max +-6%.
+    Prefers Statcast OAA (Outs Above Average) — it captures range and positioning,
+    not just errors, so it's a far better read on runs prevented.  team OAA / games ×
+    OAA_RUN_PER_OUT = runs saved per game; a good defense scales opponent runs DOWN.
+    Falls back to the error-rate + double-play-rate model when OAA is unavailable.
+    Max ±6% either way.
     """
+    if oaa is not None and games and games > 0:
+        runs_saved_pg = (oaa / games) * OAA_RUN_PER_OUT
+        return max(0.94, min(1.06, 1.0 - runs_saved_pg / LEAGUE_AVG_RUNS))
+
     if not fielding:
         return 1.0
     err_pg = fielding.get("errors_per_game", LEAGUE_AVG_ERRORS_PER_GAME)

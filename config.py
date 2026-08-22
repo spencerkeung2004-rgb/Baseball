@@ -68,6 +68,11 @@ LEAGUE_AVG_ERRORS_PER_GAME = 0.58   # approx modern-era MLB team errors/game
 LEAGUE_AVG_DP_PER_GAME     = 0.78   # approx modern-era MLB team double plays/game
 DEFENSE_ERROR_WEIGHT = 0.05  # run-factor swing per error/game above/below league average
 DEFENSE_DP_WEIGHT    = 0.03  # run-factor swing per double-play/game above/below league average
+# Statcast OAA (Outs Above Average) is the preferred defensive read (captures range,
+# not just errors).  1 out prevented ≈ OAA_RUN_PER_OUT runs; team OAA/games → runs
+# saved per game → multiplier on the OPPONENT's runs.  Falls back to errors+DP when
+# OAA is unavailable, and keeps the same ±6% clamp.
+OAA_RUN_PER_OUT = 0.80
 
 # Blending weights: season vs recent performance
 # Rate stats (ERA, K/9, BB/9) are noisy over 5 starts — lean on season
@@ -93,6 +98,17 @@ SP_SKILL_XERA_W = 0.35   # xERA (Statcast expected ERA from contact quality allo
 # over the posted lineup, bounded so it stays a regression nudge, not a rewrite.
 XWOBA_FACTOR_MIN = 0.94
 XWOBA_FACTOR_MAX = 1.06
+
+# Bullpen fatigue: a pen that threw heavily the last couple days has worse arms
+# available today.  Relief IP over BULLPEN_LOOKBACK_DAYS vs the expected (~3 IP/game a
+# normal start leaves the pen) → multiplier on the opponent's bullpen ERA portion of
+# the run projection.  Bounded; no-op when recent box-score data is unavailable.
+BULLPEN_LOOKBACK_DAYS        = 1     # just last night — dominant fatigue signal, and
+                                     # one box score/team keeps the picks run fast
+BULLPEN_EXPECTED_IP_PER_GAME = 3.0
+BULLPEN_FATIGUE_SCALE        = 0.015   # ERA-factor bump per excess relief inning
+BULLPEN_FATIGUE_MIN          = 0.97    # well-rested pen (deep starts / off day)
+BULLPEN_FATIGUE_MAX          = 1.08    # gassed pen
 
 # Starter run-prevention estimate is regressed toward league average by sample
 # size:  true ≈ observed·IP/(IP+K) + league·K/(IP+K),  K = SP_SKILL_REGRESSION_IP.
