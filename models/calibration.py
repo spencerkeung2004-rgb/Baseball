@@ -329,7 +329,12 @@ def _normalise_type(bet_type: str) -> str:
     if t == "total_under":       return "total_under"
     if t == "pitcher_k_over":    return "pitcher_k_over"
     if t == "pitcher_k_under":   return "pitcher_k_under"
-    if t in ("nrfi_nrfi", "nrfi_yrfi"): return "nrfi"
+    # NRFI and YRFI are COMPLEMENTARY bets (P(YRFI) = 1 - P(NRFI)) whose model
+    # biases point in OPPOSITE directions (YRFI over-projected, NRFI under-
+    # projected).  Pooling them into one Platt bucket makes the two biases cancel
+    # (merged gap ~0), so neither side gets corrected.  Keep them separate.
+    if t in ("nrfi_yrfi", "yrfi"): return "nrfi_yrfi"
+    if t in ("nrfi_nrfi", "nrfi"): return "nrfi_nrfi"
     if t == "parlay":            return "parlay"
     if t == "batter_hits":       return "batter_hits"
     return "other"
