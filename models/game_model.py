@@ -20,7 +20,7 @@ from config import (
     XWOBA_FACTOR_MIN, XWOBA_FACTOR_MAX,
     BULLPEN_LOOKBACK_DAYS, BULLPEN_EXPECTED_IP_PER_GAME, BULLPEN_FATIGUE_SCALE,
     BULLPEN_FATIGUE_MIN, BULLPEN_FATIGUE_MAX,
-    LEAGUE_WOBA, WOBA_SCALE, DEF_MOMENTUM_SHARE,
+    LEAGUE_WOBA, WOBA_SCALE, DEF_MOMENTUM_SHARE, USE_MOMENTUM_H2H,
     PARK_FACTORS, DOME_STADIUMS,
 )
 from data import mlb_api, weather_api, savant_api
@@ -107,10 +107,16 @@ def project_game(game):
     h2h_home      = mlb_api.get_head_to_head(home_id, away_id)
     h2h_away      = mlb_api.get_head_to_head(away_id, home_id)
 
-    home_mom_f = _momentum_factor(home_momentum)
-    away_mom_f = _momentum_factor(away_momentum)
-    home_h2h_f = _h2h_factor(h2h_home)
-    away_h2h_f = _h2h_factor(h2h_away)
+    if USE_MOMENTUM_H2H:
+        home_mom_f = _momentum_factor(home_momentum)
+        away_mom_f = _momentum_factor(away_momentum)
+        home_h2h_f = _h2h_factor(h2h_home)
+        away_h2h_f = _h2h_factor(h2h_away)
+    else:
+        # Disabled — L10/H2H carry ~no predictive signal (r=+0.018 vs runs over
+        # 2136 games); leaving them at 1.0 makes the multipliers below no-ops and
+        # _def_momentum(1.0)=1.0.  L10/H2H are still fetched above for display only.
+        home_mom_f = away_mom_f = home_h2h_f = away_h2h_f = 1.0
 
     # Team defense — each side's own fielding-quality multiplier, applied against the
     # OPPONENT's batting (the team on the field, not at bat).  Prefer Statcast OAA.

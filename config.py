@@ -161,6 +161,15 @@ RUN_PROJ_FACTOR = 0.92
 # momentum is a weak, regression-prone signal.
 DEF_MOMENTUM_SHARE = 0.50
 
+# Recent-form (L10 momentum) and season head-to-head factors.  DISABLED: a direct
+# test over 2136 team-games (2026-06-15..09-16) found the momentum factor
+# correlates with actual runs scored at r=+0.018 (0.03% of variance) — it asserted
+# an +8.3% hot-vs-cold run gap where reality was +2.4%, and beat a flat league mean
+# by 0.0005 MAE (noise).  Applying ±10% run swings off a ~0-signal input was
+# overfitting.  Any residual win signal (hot 52.4% vs cold 48.2%) is team quality,
+# already captured by season stats / pitcher skill / wOBA.  Set True to restore.
+USE_MOMENTUM_H2H = False
+
 # Weather Adjustments
 TEMP_FACTOR_PER_10F = 0.015
 WIND_OUT_FACTOR_PER_10MPH = 0.05
