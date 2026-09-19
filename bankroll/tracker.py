@@ -157,10 +157,12 @@ def get_performance_by_units(days=30):
                   COALESCE(SUM(stake), 0)
            FROM bets
            WHERE result != 'pending'
+             AND stake > 0
              AND date >= date('now', ?)
+             AND date >= ?
            GROUP BY units
            ORDER BY units DESC""",
-        (f"-{days} days",),
+        (f"-{days} days", CALIBRATION_EPOCH),
     ).fetchall()
     conn.close()
     result = []
@@ -186,6 +188,10 @@ def get_performance_by_units(days=30):
 
 
 def get_performance(days=30):
+    # Real-money accounting only: stake>0 excludes stake-$0 tracking/paper bets
+    # (which settle to 'win'/'loss' and otherwise inflate the win rate), and the
+    # CALIBRATION_EPOCH floor excludes the pre-reset model so the numbers reflect
+    # the current model since the 2026-07-23 fresh-$1000 start.
     init_db()
     conn = _conn()
     row = conn.execute(
@@ -198,8 +204,10 @@ def get_performance(days=30):
                   COALESCE(AVG(edge), 0)
            FROM bets
            WHERE result != 'pending'
-             AND date >= date('now', ?)""",
-        (f"-{days} days",),
+             AND stake > 0
+             AND date >= date('now', ?)
+             AND date >= ?""",
+        (f"-{days} days", CALIBRATION_EPOCH),
     ).fetchone()
     conn.close()
 
