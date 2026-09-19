@@ -1,4 +1,5 @@
 """The Odds API wrapper — pulls FanDuel lines for MLB games."""
+import datetime as _dt
 import hashlib
 import json
 import time
@@ -303,22 +304,64 @@ def remove_vig(home_odds, away_odds):
 
 # ── Fuzzy team matching ───────────────────────────────────────────────────────
 
+def _parse_iso(ts):
+    """Parse an ISO-8601 timestamp (with trailing Z) to aware datetime, or None."""
+    if not ts:
+        return None
+    try:
+        return _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
 def match_fd_game(mlb_game, fd_games):
-    """Match an MLB API game dict to a FanDuel odds dict by team name."""
+    """Match an MLB API game dict to a FanDuel odds dict by team name, choosing the
+    event whose start time is CLOSEST to the MLB game's.
+
+    The odds feed can carry a same-matchup event from a prior day that is still
+    live/just-finished and emitting garbage in-play lines (e.g. a 15.5 total, a
+    -770 moneyline).  Matching on team name alone grabbed whichever came first —
+    often that stale event — and manufactured a huge fake edge.  Disambiguate by
+    commence_time proximity to the scheduled game.
+    """
     if not fd_games:
         return None
     home_words = set(mlb_game["home_team_name"].lower().split())
     away_words = set(mlb_game["away_team_name"].lower().split())
+    game_dt    = _parse_iso(mlb_game.get("game_time"))
+
+    candidates = []   # (fd, sides_swapped)
     for fd in fd_games:
         fh = set(fd["home_team"].lower().split())
         fa = set(fd["away_team"].lower().split())
         if (home_words & fh) and (away_words & fa):
-            return fd
-        if (home_words & fa) and (away_words & fh):
-            # FanDuel has sides swapped
-            return {
-                **fd,
-                "moneyline_home": fd.get("moneyline_away"),
-                "moneyline_away": fd.get("moneyline_home"),
-            }
-    return None
+            candidates.append((fd, False))
+        elif (home_words & fa) and (away_words & fh):
+            candidates.append((fd, True))    # FanDuel has sides swapped
+    if not candidates:
+        return None
+
+    def _closeness(item):
+        fdt = _parse_iso(item[0].get("commence_time"))
+        if game_dt is None or fdt is None:
+            return float("inf")
+        return abs((fdt - game_dt).total_seconds())
+
+    fd, swapped = min(candidates, key=_closeness)
+
+    # If the nearest same-matchup event is still >12h from the scheduled game, the
+    # real line isn't posted yet and this is a stale prior-day event — no match
+    # (skip the game rather than price against a stale/in-play line).  Only enforced
+    # when we have a parseable game time; otherwise fall back to the nearest match.
+    if game_dt is not None:
+        fdt = _parse_iso(fd.get("commence_time"))
+        if fdt is None or abs((fdt - game_dt).total_seconds()) > 12 * 3600:
+            return None
+
+    if swapped:
+        return {
+            **fd,
+            "moneyline_home": fd.get("moneyline_away"),
+            "moneyline_away": fd.get("moneyline_home"),
+        }
+    return fd

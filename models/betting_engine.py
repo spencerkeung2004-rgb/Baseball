@@ -310,6 +310,11 @@ def _total_bets(proj, fd):
 
     if line is None:
         return bets
+    # Plausibility guard: real MLB full-game totals sit ~5.5–13.5.  A line outside
+    # this range is bad/stale feed data (e.g. an in-play total from a prior-day
+    # event) — pricing against it manufactures a huge fake edge.  Skip it.
+    if not (5.0 <= line <= 14.0):
+        return bets
 
     # Strip vig from the two-sided market when both sides are available
     if over_odds is not None and under_odds is not None:
