@@ -58,24 +58,29 @@ def find_daily_bets(games, include_started=False):
             single_leg.extend(_batter_hits_bets(proj, props))
             single_leg.extend(_batter_tb_bets(proj, props))
 
-    # Bet types that must have CAL_TARGET_SAMPLES calibration data before
-    # they are eligible for staked picks.  Until then they are tracking-only.
-    # batter_hits is newly live (FanDuel never exposed the market, so it has 0
-    # settled bets and no calibration) and its raw projections are badly skewed
-    # to UNDER — gate it until it proves out with real outcome data.
-    _REQUIRE_CAL = {"nrfi_nrfi", "nrfi_yrfi", "batter_hits"}
+    # Bet types whose model "edge" is empirically ANTI-PREDICTIVE: over the full
+    # settled history the higher the model's edge, the LOWER the realized win rate
+    # — the signature of winner's curse on an efficient market (the "edge" is
+    # projection noise and edge-ranking selects the most over-projected lines).
+    #   batter_hits    : staked (avg edge 10.2%) 2-6 = 25%  vs tracking 55-33 = 63%
+    #   pitcher_k_under : staked (avg edge 22.0%) 2-4 = 33%  vs tracking 24-26 = 48%
+    # No market anchor short of "don't bet it" fixes an inverted edge, so these are
+    # NEVER staked — but still generated + TRACKED so they keep feeding calibration.
+    # pitcher_k_over is NOT here: its edge is genuinely predictive (staked 14-9 =
+    # 61% vs tracking 44%).  Parlays are built from the staked pool, so disabling
+    # batter_hits here also collapses the batter-hits parlays that were −$178.
+    _STAKE_DISABLED = {"batter_hits", "pitcher_k_under"}
+
+    # Bet types that must have CAL_TARGET_SAMPLES calibration data before they are
+    # eligible for staked picks.  Until then they are tracking-only.
+    _REQUIRE_CAL = {"nrfi_nrfi", "nrfi_yrfi"}
     _by_type_cal = _CAL_WEIGHTS.get("by_type", {})
     from models.calibration import _normalise_type as _nt_pre
 
-    # Per-type edge floor overrides (raised when a type is poorly calibrated).
-    # pitcher_k_under is hitting 28% vs predicted 65% — require much higher edge
-    # before staking until 30 samples are reached and calibration corrects it.
-    _TYPE_MIN_EDGE = {
-        "pitcher_k_under": 0.30,
-    }
-
     def _cal_eligible(b):
         t = b.get("type", "")
+        if t in _STAKE_DISABLED:
+            return False               # inverted edge — track only, never stake
         if t not in _REQUIRE_CAL:
             return True
         norm = _nt_pre(t)
@@ -83,7 +88,7 @@ def find_daily_bets(games, include_started=False):
         return samples >= CAL_TARGET_SAMPLES
 
     def _min_edge_for(b):
-        return _TYPE_MIN_EDGE.get(b.get("type", ""), MIN_EDGE)
+        return MIN_EDGE
 
     # Filter single-leg candidates
     qualified = [
