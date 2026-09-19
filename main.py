@@ -49,9 +49,9 @@ def cmd_picks(date_str, save):
         return
 
     print(f"  {len(games)} games found — running model…\n")
-    picks = find_daily_bets(games)
-
     bankroll = get_bankroll()
+    picks = find_daily_bets(games, bankroll=bankroll)
+
     print_picks(picks, bankroll, date_str)
 
     rem = get_requests_remaining()

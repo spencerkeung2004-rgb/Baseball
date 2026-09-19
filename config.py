@@ -25,6 +25,13 @@ MAX_UNITS = 4.0
 MIN_UNITS = 0.5
 KELLY_FRACTION = 0.25   # fraction of full Kelly to stake (quarter-Kelly — standard, lower variance)
 
+# Cap on total real-money stake per day, as a fraction of the CURRENT bankroll.
+# A guardrail against single-day over-concentration: after the props gate,
+# staked cards are totals-heavy and quarter-Kelly could size a slate to ~30% of
+# roll.  If the day's staked total exceeds this, every staked pick is scaled down
+# proportionally (edge ranking preserved).
+MAX_DAILY_EXPOSURE_PCT = 0.20
+
 # Bet Filters
 MIN_ODDS_AMERICAN = -300   # allow favourites up to -300
 MIN_EDGE = 0.05

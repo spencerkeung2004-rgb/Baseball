@@ -9,6 +9,7 @@ from config import (
     MIN_ODDS_AMERICAN, MIN_EDGE, MAX_UNITS, MIN_UNITS, UNIT_SIZE,
     STARTING_BANKROLL, KELLY_FRACTION, BATTER_PROPS_BOOKMAKER,
     DAILY_PICKS, CAL_TARGET_SAMPLES, CAL_MAINTENANCE_PER_TYPE,
+    MAX_DAILY_EXPOSURE_PCT,
 )
 from data.odds_api import (
     american_to_decimal, american_to_implied_prob, decimal_to_american,
@@ -25,7 +26,7 @@ _CAL_WEIGHTS = load_cal_weights()
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def find_daily_bets(games, include_started=False):
+def find_daily_bets(games, include_started=False, bankroll=None):
     """
     Given today's list of game dicts (from mlb_api.get_schedule),
     return up to DAILY_PICKS bet dicts sorted by edge descending.
@@ -33,7 +34,16 @@ def find_daily_bets(games, include_started=False):
 
     include_started=True keeps games that already commenced (used to record a full
     slate as calibration tracking after first pitch).
+
+    bankroll: current bankroll, used for Kelly sizing and the daily exposure cap.
+    Kelly is a fraction of the LIVE bankroll — sizing against a frozen starting
+    figure over-bets as the roll shrinks.  Falls back to STARTING_BANKROLL.
     """
+    global _BANKROLL_UNITS
+    if bankroll and bankroll > 0:
+        _BANKROLL_UNITS = bankroll / UNIT_SIZE
+    bankroll = bankroll if (bankroll and bankroll > 0) else STARTING_BANKROLL
+
     fd_games = get_mlb_odds(include_started=include_started)
     single_leg = []
 
@@ -156,6 +166,19 @@ def find_daily_bets(games, include_started=False):
         used_legs.update(legs)
 
     picks.sort(key=lambda x: x["edge"], reverse=True)
+
+    # ── Per-day exposure cap ─────────────────────────────────────────────────
+    # Scale all staked picks down proportionally if the day's total stake exceeds
+    # MAX_DAILY_EXPOSURE_PCT of the current bankroll.  Edge ranking is preserved;
+    # this only limits single-day concentration (e.g. one huge-edge total sizing big).
+    staked_total = sum(p["stake"] for p in picks)
+    cap = MAX_DAILY_EXPOSURE_PCT * bankroll
+    if staked_total > cap > 0:
+        scale = cap / staked_total
+        for p in picks:
+            p["units"]         = round(p["units"] * scale, 2)
+            p["stake"]         = round(p["stake"] * scale, 2)
+            p["potential_win"] = round(p["potential_win"] * scale, 2)
 
     # ── Append calibration-only bets (stake=0, tracking only) ────────────────
     # Every threshold-qualifying bet becomes a calibration pick.  While a type is
